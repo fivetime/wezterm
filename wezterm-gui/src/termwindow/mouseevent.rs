@@ -43,7 +43,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::PopupMenuItem(_) => {}
         }
     }
 
@@ -54,7 +55,8 @@ impl super::TermWindow {
             | UIItemType::AboveScrollThumb
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
-            | UIItemType::Split(_) => {}
+            | UIItemType::Split(_)
+            | UIItemType::PopupMenuItem(_) => {}
         }
     }
 
@@ -66,6 +68,13 @@ impl super::TermWindow {
         };
 
         self.current_mouse_event.replace(event.clone());
+
+        // a modal that takes the mouse (a popup menu) sees it first
+        if let Some(modal) = self.get_modal() {
+            if modal.window_mouse_event(&event, self) {
+                return;
+            }
+        }
 
         let border = self.get_os_border();
 
@@ -382,6 +391,8 @@ impl super::TermWindow {
             UIItemType::CloseTab(idx) => {
                 self.mouse_event_close_tab(idx, event, context);
             }
+            // the popup menu takes its events before they get here
+            UIItemType::PopupMenuItem(_) => {}
         }
     }
 

@@ -486,6 +486,37 @@ pub struct InputSelectorEntry {
     pub id: Option<String>,
 }
 
+/// One line of a `PopupMenu`: an item to choose (reported to the action
+/// as `InputSelector` reports its choices), a heading, or a separator.
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct PopupMenuEntry {
+    #[dynamic(default)]
+    pub label: String,
+    #[dynamic(default)]
+    pub id: Option<String>,
+    /// A `wezterm.nerdfonts` name.
+    #[dynamic(default)]
+    pub icon: Option<String>,
+    /// Shown dimmed and not chosen when false.
+    #[dynamic(default = "crate::default_true")]
+    pub enabled: bool,
+    #[dynamic(default)]
+    pub separator: bool,
+    #[dynamic(default)]
+    pub header: bool,
+}
+
+/// A menu that pops up where the mouse is, drawn by the GUI over the
+/// window (not in the pane, as `InputSelector` is). The action is a
+/// `wezterm.action_callback`, called with `(window, pane, id, label)` for
+/// the chosen item, or with nil `id` and `label` when the menu is
+/// dismissed.
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct PopupMenu {
+    pub action: Box<KeyAssignment>,
+    pub choices: Vec<PopupMenuEntry>,
+}
+
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct InputSelector {
     pub action: Box<KeyAssignment>,
@@ -648,6 +679,7 @@ pub enum KeyAssignment {
     PromptInputLine(PromptInputLine),
     InputSelector(InputSelector),
     Confirmation(Confirmation),
+    PopupMenu(PopupMenu),
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 

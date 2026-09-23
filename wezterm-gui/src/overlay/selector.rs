@@ -383,7 +383,12 @@ impl SelectorState {
     }
 }
 
-fn trampoline(name: String, window: GuiWin, pane: MuxPane, entry: Option<InputSelectorEntry>) {
+pub(crate) fn trampoline(
+    name: String,
+    window: GuiWin,
+    pane: MuxPane,
+    entry: Option<InputSelectorEntry>,
+) {
     promise::spawn::spawn(async move {
         config::with_lua_config_on_main_thread(move |lua| do_event(lua, name, window, pane, entry))
             .await

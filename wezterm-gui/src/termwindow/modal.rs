@@ -14,6 +14,15 @@ pub trait Modal: Downcast {
         false
     }
     fn mouse_event(&self, event: MouseEvent, term_window: &mut TermWindow) -> anyhow::Result<()>;
+    /// The window's mouse event, in pixels, before anything else sees
+    /// it; true when the modal took it.
+    fn window_mouse_event(
+        &self,
+        _event: &::window::MouseEvent,
+        _term_window: &mut TermWindow,
+    ) -> bool {
+        false
+    }
     fn key_down(
         &self,
         key: KeyCode,

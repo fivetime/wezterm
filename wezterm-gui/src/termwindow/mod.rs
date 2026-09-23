@@ -78,6 +78,7 @@ pub mod modal;
 mod mouseevent;
 pub mod palette;
 pub mod paneselect;
+pub mod popupmenu;
 mod prevcursor;
 pub mod render;
 pub mod resize;
@@ -160,6 +161,8 @@ pub enum UIItemType {
     ScrollThumb,
     BelowScrollThumb,
     Split(PositionedSplit),
+    /// A choice of the popup menu, by its index in the choices.
+    PopupMenuItem(usize),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2301,6 +2304,30 @@ impl TermWindow {
         promise::spawn::spawn(future).detach();
     }
 
+    /// The popup menu, where the mouse is (the window's middle when the
+    /// keyboard asked for it).
+    fn show_popup_menu(&mut self, args: &config::keyassignment::PopupMenu) {
+        let pane = match self.get_active_pane_no_overlay() {
+            Some(pane) => pane,
+            None => return,
+        };
+        let at = match &self.current_mouse_event {
+            Some(event) => (event.coords.x as f32, event.coords.y as f32),
+            None => (
+                self.dimensions.pixel_width as f32 / 3.,
+                self.dimensions.pixel_height as f32 / 3.,
+            ),
+        };
+        match crate::termwindow::popupmenu::PopupMenu::new(
+            args.clone(),
+            MuxPane(pane.pane_id()),
+            at,
+        ) {
+            Ok(menu) => self.set_modal(Rc::new(menu)),
+            Err(err) => log::error!("PopupMenu: {err:#}"),
+        }
+    }
+
     fn show_prompt_input_line(&mut self, args: &PromptInputLine) {
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
@@ -3163,6 +3190,7 @@ impl TermWindow {
             PromptInputLine(args) => self.show_prompt_input_line(args),
             InputSelector(args) => self.show_input_selector(args),
             Confirmation(args) => self.show_confirmation(args),
+            PopupMenu(args) => self.show_popup_menu(args),
         };
         Ok(PerformAssignmentResult::Handled)
     }
