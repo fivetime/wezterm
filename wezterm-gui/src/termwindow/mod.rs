@@ -549,6 +549,16 @@ impl TermWindow {
             for state in self.pane_state.borrow_mut().values_mut() {
                 state.mouse_terminal_coords.take();
             }
+
+            // the tab switcher waits for a Ctrl release that now goes
+            // to another window: the tabs stay as they are
+            if self
+                .get_modal()
+                .is_some_and(|m| m.is::<tabswitcher::TabSwitcher>())
+            {
+                self.cancel_modal();
+            }
+            self.tab_hover_card = None;
         }
 
         // Reset the cursor blink phase
