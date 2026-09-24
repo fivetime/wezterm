@@ -252,9 +252,9 @@ impl crate::TermWindow {
                         _ => fg,
                     };
                     // the line (the close button's 28, or the title's own
-                    // height) centred in the shape, above its 1-DIP
-                    // overlap; the title centred on that line
-                    let body = (chrome_tabs::STRIP_HEIGHT - chrome_tabs::TAB_TOP - 1.) * scale;
+                    // height) centred in the highlight's 28 DIP, as Chrome
+                    // centres a tab's contents; the title on that line
+                    let body = chrome_tabs::HIGHLIGHT_HEIGHT * scale;
                     let line = if self.config.show_close_tab_button_in_tabs {
                         (chrome_tabs::BUTTON * scale).max(metrics.cell_size.height as f32)
                     } else {
@@ -497,9 +497,7 @@ impl crate::TermWindow {
                         top: dip(chrome_tabs::TAB_TOP),
                         bottom: dip(0.),
                     })
-                    .min_height(Some(dip(chrome_tabs::STRIP_HEIGHT
-                        - chrome_tabs::TAB_TOP
-                        - 1.)))
+                    .min_height(Some(dip(chrome_tabs::HIGHLIGHT_HEIGHT)))
                 }
             }
         };
@@ -534,6 +532,7 @@ impl crate::TermWindow {
         }
 
         let (left_buttons, _) = self.config.integrated_title_button_sides();
+        let mut first_tab = true;
         for item in items {
             match item.item {
                 TabBarItem::LeftStatus => left_status.push(item_to_elem(item)),
@@ -546,6 +545,23 @@ impl crate::TermWindow {
                     }
                 }
                 TabBarItem::Tab { tab_idx, active } => {
+                    if chrome && first_tab {
+                        // Chrome's strip starts at the header bar's padding
+                        // (or after the buttons there), each tab carrying
+                        // its feet: the first body that far in, clear of
+                        // the window's round corner
+                        let lead = chrome_tabs::FOOT - chrome_tabs::GAP / 2.
+                            + if left_eles.is_empty() {
+                                chrome_tabs::LEADING
+                            } else {
+                                0.
+                            };
+                        left_eles.push(
+                            Element::new(&font, ElementContent::Text(String::new()))
+                                .min_width(Some(dip(lead))),
+                        );
+                    }
+                    first_tab = false;
                     let mut elem = item_to_elem(item);
                     elem.max_width = Some(Dimension::Pixels(if chrome {
                         chrome_body
@@ -809,7 +825,10 @@ impl crate::TermWindow {
                     .as_ref()
                     .map(|c| c.bg_color.into())
                     .unwrap_or_else(|| chrome_tabs::hover(active, frame));
-                self.tab_shape_quad(&mut layers, 0, shape_of(r), top, foot, false, lin(fill))?;
+                // Chrome's highlight: a detached rounded rectangle over the
+                // body, not the tab's shape (PathType::kHighlight)
+                let (rect, radius) = chrome_tabs::highlight(*r, scale);
+                self.tab_shape_quad(&mut layers, 0, rect, radius, 0., false, lin(fill))?;
             }
         }
         if let Some((r, _)) = tabs.iter().find(|(_, a)| *a) {

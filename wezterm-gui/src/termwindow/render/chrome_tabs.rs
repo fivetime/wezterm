@@ -41,6 +41,12 @@ pub const HIGHLIGHT: f32 = 0.16;
 /// (gfx::kFaviconSize, kTabPreTitlePadding).
 pub const FAVICON: f32 = 16.;
 pub const FAVICON_GAP: f32 = 8.;
+/// The header bar's padding before the strip when no button stands
+/// there (GTK themes' usual 6).
+pub const LEADING: f32 = 6.;
+/// A highlight's height: the tab's 35 less the strip's padding and the
+/// toolbar overlap (kTabHeight - kTabStripPadding - kTabstripToolbarOverlap).
+pub const HIGHLIGHT_HEIGHT: f32 = 28.;
 
 /// The contrast below which the active tab gets its stroke, and the one
 /// its stroke keeps from it.
@@ -123,6 +129,20 @@ pub fn hover(active: SrgbaTuple, frame: SrgbaTuple) -> SrgbaTuple {
     blend(active, frame, HOVER)
 }
 
+/// Where Chrome paints a hovered inactive tab (PathType::kHighlight): a
+/// rounded rectangle from the body's top over its width, 28 DIP tall, its
+/// corners the tab's top radius or less for a narrow tab (a third of the
+/// top flat, GetTopCornerRadiusForWidth, over the width with the feet).
+pub fn highlight(body: RectF, scale: f32) -> (RectF, f32) {
+    let width = body.width() / scale + 2. * FOOT;
+    let radius = ((width - 2. * TOP_RADIUS) / 3.).clamp(0., TOP_RADIUS) * scale;
+    let height = (HIGHLIGHT_HEIGHT * scale).min(body.height());
+    (
+        euclid::rect(body.min_x(), body.min_y(), body.width(), height),
+        radius,
+    )
+}
+
 /// A tab body's width: the room for them all, within Chrome's limits.
 pub fn body_width(room: f32, tabs: usize, scale: f32) -> f32 {
     let each = room / tabs.max(1) as f32 - GAP * scale;
@@ -159,30 +179,45 @@ pub fn shape(w: u32, h: u32, top: f32, foot: f32, outline: bool) -> window::bitm
     let top = top.min((wf - 2. * foot) / 2.).min(hf - foot).max(0.);
     let k = 0.552_284_8;
     let mut pb = PathBuilder::new();
-    pb.move_to(0., hf);
-    pb.cubic_to(k * foot, hf, foot, hf - foot + k * foot, foot, hf - foot);
-    pb.line_to(foot, top);
-    pb.cubic_to(
-        foot,
-        top - k * top,
-        foot + top - k * top,
-        0.,
-        foot + top,
-        0.,
-    );
-    pb.line_to(wf - foot - top, 0.);
-    pb.cubic_to(
-        wf - foot - top + k * top,
-        0.,
-        wf - foot,
-        top - k * top,
-        wf - foot,
-        top,
-    );
-    pb.line_to(wf - foot, hf - foot);
-    pb.cubic_to(wf - foot, hf - foot + k * foot, wf - k * foot, hf, wf, hf);
-    if !outline {
+    if foot == 0. && !outline {
+        // no feet: a rounded rectangle (the hover highlight)
+        let r = top.min(wf / 2.).min(hf / 2.);
+        pb.move_to(r, 0.);
+        pb.line_to(wf - r, 0.);
+        pb.cubic_to(wf - r + k * r, 0., wf, r - k * r, wf, r);
+        pb.line_to(wf, hf - r);
+        pb.cubic_to(wf, hf - r + k * r, wf - r + k * r, hf, wf - r, hf);
+        pb.line_to(r, hf);
+        pb.cubic_to(r - k * r, hf, 0., hf - r + k * r, 0., hf - r);
+        pb.line_to(0., r);
+        pb.cubic_to(0., r - k * r, r - k * r, 0., r, 0.);
         pb.close();
+    } else {
+        pb.move_to(0., hf);
+        pb.cubic_to(k * foot, hf, foot, hf - foot + k * foot, foot, hf - foot);
+        pb.line_to(foot, top);
+        pb.cubic_to(
+            foot,
+            top - k * top,
+            foot + top - k * top,
+            0.,
+            foot + top,
+            0.,
+        );
+        pb.line_to(wf - foot - top, 0.);
+        pb.cubic_to(
+            wf - foot - top + k * top,
+            0.,
+            wf - foot,
+            top - k * top,
+            wf - foot,
+            top,
+        );
+        pb.line_to(wf - foot, hf - foot);
+        pb.cubic_to(wf - foot, hf - foot + k * foot, wf - k * foot, hf, wf, hf);
+        if !outline {
+            pb.close();
+        }
     }
     let mut image = window::bitmaps::Image::new(w.max(1) as usize, h.max(1) as usize);
     let (Some(path), Some(mut pixmap)) = (pb.finish(), Pixmap::new(w.max(1), h.max(1))) else {
@@ -275,5 +310,26 @@ mod tests {
         let oa = |x: usize, y: usize| o.pixel_data_slice()[(y * 80 + x) * 4 + 3];
         assert_eq!(oa(40, 15), 0, "an outline is hollow");
         assert!(oa(40, 0) > 0, "and runs along the top");
+    }
+
+    #[test]
+    fn the_highlight() {
+        // a pill: no feet, every corner round
+        let p = shape(80, 28, 10., 0., false);
+        let alpha = |x: usize, y: usize| p.pixel_data_slice()[(y * 80 + x) * 4 + 3];
+        assert_eq!(alpha(40, 14), 255);
+        assert_eq!(alpha(0, 0), 0, "top corner");
+        assert_eq!(alpha(0, 27), 0, "bottom corner too");
+        assert_eq!(alpha(40, 27), 255, "flat along the bottom between");
+        // over the body, 28 DIP from its top, corners 10 but a third flat
+        let body = euclid::rect(100., 9., 300., 51.);
+        let (rect, radius) = highlight(body, 1.5);
+        assert_eq!(
+            (rect.min_x(), rect.min_y(), rect.width(), rect.height()),
+            (100., 9., 300., 42.)
+        );
+        assert_eq!(radius, 15.);
+        let (_, narrow) = highlight(euclid::rect(0., 0., 12., 51.), 1.5);
+        assert!(narrow < 15., "a narrow tab's corners smaller");
     }
 }
