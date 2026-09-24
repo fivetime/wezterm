@@ -1477,9 +1477,43 @@ fn icon_image(path: &str, size: u32) -> anyhow::Result<Image> {
     Ok(Image::from_raw(size as usize, size as usize, mask))
 }
 
+/// An SVG file drawn `width` by `height` pixels in its own colours
+/// (centred, its proportions kept).
+fn svg_picture(path: &str, width: u32, height: u32) -> anyhow::Result<Image> {
+    use resvg::{tiny_skia, usvg};
+    let data = std::fs::read(path)?;
+    let tree = usvg::Tree::from_data(&data, &usvg::Options::default())?;
+    let (width, height) = (width.max(1), height.max(1));
+    let mut pixmap = tiny_skia::Pixmap::new(width, height).context("no pixmap for the picture")?;
+    let (w, h) = (tree.size().width(), tree.size().height());
+    let scale = (width as f32 / w).min(height as f32 / h);
+    let transform = tiny_skia::Transform::from_row(
+        scale,
+        0.,
+        0.,
+        scale,
+        (width as f32 - w * scale) / 2.,
+        (height as f32 - h * scale) / 2.,
+    );
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    // straight alpha, as the other pictures
+    let rgba = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|p| {
+            let c = p.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect();
+    Ok(Image::from_raw(width as usize, height as usize, rgba))
+}
+
 /// A picture file scaled to `width` by `height` pixels (it was drawn
 /// larger, for sharpness), straight RGBA as the atlas keeps colour images.
 fn picture_image(path: &str, width: u32, height: u32) -> anyhow::Result<Image> {
+    if path.ends_with(".svg") || path.ends_with(".svgz") {
+        return svg_picture(path, width, height);
+    }
     let picture = image::open(path)?.to_rgba8();
     let (width, height) = (width.max(1), height.max(1));
     let picture = if picture.dimensions() == (width, height) {

@@ -247,6 +247,10 @@ impl crate::TermWindow {
                     };
                     let clear = window::color::LinearRgba::TRANSPARENT;
                     let fg = fg_color.unwrap_or_else(|| tab.fg_color.into()).to_linear();
+                    let hover_fg = match colors.inactive_tab_hover.as_ref() {
+                        Some(hover) if !active && fg_color.is_none() => hover.fg_color.to_linear(),
+                        _ => fg,
+                    };
                     // the line (the close button's 28, or the title's own
                     // height) centred in the shape, above its 1-DIP
                     // overlap; the title centred on that line
@@ -283,7 +287,7 @@ impl crate::TermWindow {
                         .hover_colors(Some(ElementColors {
                             border: BorderColor::new(clear),
                             bg: clear.into(),
-                            text: fg.into(),
+                            text: hover_fg.into(),
                         }))
                 }
                 TabBarItem::Tab { active, .. } if active => element
@@ -467,13 +471,36 @@ impl crate::TermWindow {
                                 .into(),
                         })
                     }),
-                TabBarItem::WindowButton(button) => window_button_element(
-                    button,
-                    self.window_state.contains(window::WindowState::MAXIMIZED),
-                    &font,
-                    &metrics,
-                    &self.config,
-                ),
+                TabBarItem::WindowButton(button) => {
+                    let element = window_button_element(
+                        button,
+                        self.window_state.contains(window::WindowState::MAXIMIZED),
+                        &font,
+                        &metrics,
+                        &self.config,
+                    );
+                    if !chrome {
+                        return element;
+                    }
+                    // centred on the tabs' line, as Chrome centres its
+                    // buttons in the strip (NavButtonProviderGtk)
+                    Element::new(
+                        &font,
+                        ElementContent::Children(vec![
+                            element.vertical_align(VerticalAlign::Middle)
+                        ]),
+                    )
+                    .vertical_align(VerticalAlign::Top)
+                    .margin(BoxDimension {
+                        left: dip(0.),
+                        right: dip(0.),
+                        top: dip(chrome_tabs::TAB_TOP),
+                        bottom: dip(0.),
+                    })
+                    .min_height(Some(dip(chrome_tabs::STRIP_HEIGHT
+                        - chrome_tabs::TAB_TOP
+                        - 1.)))
+                }
             }
         };
 
@@ -542,9 +569,35 @@ impl crate::TermWindow {
                                     .into_iter()
                                     .map(|k| k.vertical_align(VerticalAlign::Middle))
                                     .collect();
-                                kids = vec![Element::new(&font, ElementContent::Children(title))
+                                // the favicon before it, as Chrome's
+                                let icon = self.config.tab_icon.as_ref().map(|path| {
+                                    let size = Dimension::Points(chrome_tabs::FAVICON * 0.75);
+                                    room -=
+                                        (chrome_tabs::FAVICON + chrome_tabs::FAVICON_GAP) * scale;
+                                    Element::new(
+                                        &font,
+                                        ElementContent::Image {
+                                            normal: path.clone(),
+                                            hover: None,
+                                            backdrop: None,
+                                            width: size,
+                                            height: size,
+                                        },
+                                    )
                                     .vertical_align(VerticalAlign::Middle)
-                                    .max_width(Some(Dimension::Pixels(room.max(0.))))];
+                                    .margin(BoxDimension {
+                                        left: dip(0.),
+                                        right: dip(chrome_tabs::FAVICON_GAP),
+                                        top: dip(0.),
+                                        bottom: dip(0.),
+                                    })
+                                });
+                                kids = icon.into_iter().collect();
+                                kids.push(
+                                    Element::new(&font, ElementContent::Children(title))
+                                        .vertical_align(VerticalAlign::Middle)
+                                        .max_width(Some(Dimension::Pixels(room.max(0.)))),
+                                );
                             }
                             if self.config.show_close_tab_button_in_tabs {
                                 kids.push(if chrome {
@@ -749,7 +802,13 @@ impl crate::TermWindow {
         let top = chrome_tabs::TOP_RADIUS * scale;
         for (r, is_active) in &tabs {
             if !is_active && hovered(r) {
-                let fill = chrome_tabs::hover(active, frame);
+                // the configuration's hover colour where it gives one (a
+                // desktop theme's, as Chrome's), else Chrome's own blend
+                let fill = colors
+                    .inactive_tab_hover
+                    .as_ref()
+                    .map(|c| c.bg_color.into())
+                    .unwrap_or_else(|| chrome_tabs::hover(active, frame));
                 self.tab_shape_quad(&mut layers, 0, shape_of(r), top, foot, false, lin(fill))?;
             }
         }

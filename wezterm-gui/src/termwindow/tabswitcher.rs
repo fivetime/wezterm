@@ -270,6 +270,14 @@ impl TabSwitcher {
                 text: fg.into(),
             });
         let grid = shell(grid, mix(bg, fg, 0.15), 1., 12.);
+        let (grid, (reach, _)) = crate::termwindow::render::hover_card::shadowed(
+            &title_font,
+            grid,
+            px(12.),
+            scale,
+            (bg.0 + bg.1 + bg.2) / 3. < 0.2,
+        );
+        let grid_w = grid_w + 2. * reach;
 
         let x = ((window_w - grid_w) / 2.).max(0.).round();
         let mut computed = term_window.compute_element(

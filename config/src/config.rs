@@ -529,6 +529,11 @@ pub struct Config {
     #[dynamic(default)]
     pub show_tab_hover_cards: bool,
 
+    /// A picture (SVG, PNG, ...) drawn before every tab's title in the
+    /// Chrome tab strip, as Chrome draws a page's favicon there: 16 DIP.
+    #[dynamic(default)]
+    pub tab_icon: Option<String>,
+
     #[dynamic(default)]
     pub tab_bar_at_bottom: bool,
 

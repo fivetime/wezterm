@@ -84,6 +84,53 @@ pub(crate) fn last_lines(lines: impl Iterator<Item = String>, count: usize) -> V
     all.into_iter().skip(skip).collect()
 }
 
+/// A bubble's shadow under `element` (Chrome's bubbles stand out from
+/// the page by it, their colour being the window's): rings of shadow
+/// around it, deeper below, each a shell in its translucent colour whose
+/// corners (filled in that colour) round it. Returns the element and how
+/// far the shadow reaches to the left and above.
+pub(crate) fn shadowed(
+    font: &std::rc::Rc<wezterm_font::LoadedFont>,
+    element: Element,
+    radius: f32,
+    scale: f32,
+    dark: bool,
+) -> (Element, (f32, f32)) {
+    const RINGS: usize = 4;
+    let ring = (1.5 * scale).round().max(1.);
+    let shade = LinearRgba(0., 0., 0., if dark { 0.12 } else { 0.035 });
+    let mut element = element;
+    for i in 1..=RINGS {
+        let r = Dimension::Pixels(radius + ring * i as f32);
+        let corner = |poly| SizedPoly {
+            width: r,
+            height: r,
+            poly,
+        };
+        element = Element::new(font, ElementContent::Children(vec![element]))
+            .display(DisplayType::Block)
+            .padding(BoxDimension {
+                left: Dimension::Pixels(ring),
+                right: Dimension::Pixels(ring),
+                top: Dimension::Pixels((ring / 2.).round()),
+                bottom: Dimension::Pixels(ring + (ring / 2.).round()),
+            })
+            .border_corners(Some(Corners {
+                top_left: corner(TOP_LEFT_ROUNDED_CORNER),
+                top_right: corner(TOP_RIGHT_ROUNDED_CORNER),
+                bottom_left: corner(BOTTOM_LEFT_ROUNDED_CORNER),
+                bottom_right: corner(BOTTOM_RIGHT_ROUNDED_CORNER),
+            }))
+            .colors(ElementColors {
+                border: BorderColor::new(shade),
+                bg: shade.into(),
+                text: InheritableColor::Inherited,
+            });
+    }
+    let reach = RINGS as f32;
+    (element, (ring * reach, (ring / 2.).round() * reach))
+}
+
 impl crate::TermWindow {
     /// The pointer moved: over the tab `tab` (its body or close button),
     /// or not over a tab. A card waits `DELAY` on a new tab; a press or
@@ -351,8 +398,15 @@ impl crate::TermWindow {
                 text: fg.into(),
             });
 
-        let x = tab_x.min(window_w - width - 8. * scale).max(8. * scale);
-        let y = tab_bottom + 4. * scale;
+        let (card, (left, top)) = shadowed(
+            &title_font,
+            card,
+            (8. * scale).round(),
+            scale,
+            (bg.0 + bg.1 + bg.2) / 3. < 0.2,
+        );
+        let x = tab_x.min(window_w - width - 8. * scale).max(8. * scale) - left;
+        let y = tab_bottom + 4. * scale - top;
         let gl_state = self.render_state.as_ref().unwrap();
         let computed = self.compute_element(
             &LayoutContext {
@@ -369,7 +423,7 @@ impl crate::TermWindow {
                 bounds: euclid::rect(
                     x,
                     y,
-                    width,
+                    width + 2. * left,
                     (self.dimensions.pixel_height as f32 - y).max(0.),
                 ),
                 metrics: &metrics,

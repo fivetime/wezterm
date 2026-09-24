@@ -37,6 +37,10 @@ pub const SEPARATOR: (f32, f32) = (2., 16.);
 pub const BUTTON: f32 = 28.;
 /// Their hover highlight's opacity.
 pub const HIGHLIGHT: f32 = 0.16;
+/// A favicon's size and the room after it before the title
+/// (gfx::kFaviconSize, kTabPreTitlePadding).
+pub const FAVICON: f32 = 16.;
+pub const FAVICON_GAP: f32 = 8.;
 
 /// The contrast below which the active tab gets its stroke, and the one
 /// its stroke keeps from it.
