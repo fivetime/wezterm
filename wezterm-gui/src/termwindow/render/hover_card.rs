@@ -74,13 +74,13 @@ async fn ask_lua(
     })
 }
 
-/// The last non-empty lines of a screen, `LINES` at most, in order.
-fn last_lines(lines: impl Iterator<Item = String>) -> Vec<String> {
+/// The last non-empty lines of a screen, `count` at most, in order.
+pub(crate) fn last_lines(lines: impl Iterator<Item = String>, count: usize) -> Vec<String> {
     let mut all: Vec<String> = lines.map(|l| l.trim_end().to_string()).collect();
     while all.last().is_some_and(|l| l.is_empty()) {
         all.pop();
     }
-    let skip = all.len().saturating_sub(LINES);
+    let skip = all.len().saturating_sub(count);
     all.into_iter().skip(skip).collect()
 }
 
@@ -186,7 +186,7 @@ impl crate::TermWindow {
         let dims = pane.get_dimensions();
         let top = dims.physical_top;
         let (_, lines) = pane.get_lines(top..top + dims.viewport_rows as isize);
-        let lines = last_lines(lines.iter().map(|l| l.as_str().to_string()));
+        let lines = last_lines(lines.iter().map(|l| l.as_str().to_string()), LINES);
         Some(Content { title, note, lines })
     }
 
@@ -391,11 +391,11 @@ mod tests {
     fn the_screens_last_lines() {
         let lines = vec!["a", "b  ", "", "c", "d", "e", "f", "g", "", "  "];
         assert_eq!(
-            last_lines(lines.into_iter().map(String::from)),
+            last_lines(lines.into_iter().map(String::from), 6),
             ["", "c", "d", "e", "f", "g"]
         );
         assert_eq!(
-            last_lines(vec!["", ""].into_iter().map(String::from)),
+            last_lines(vec!["", ""].into_iter().map(String::from), 6),
             Vec::<String>::new()
         );
     }

@@ -667,6 +667,8 @@ impl super::TermWindow {
                 if let Some(modal) = self.get_modal() {
                     if window_key.key_is_down {
                         modal.key_down(key, modifiers, self).ok();
+                    } else {
+                        modal.key_up(key, modifiers, self).ok();
                     }
                     return;
                 }

@@ -84,6 +84,7 @@ pub mod render;
 pub mod resize;
 mod selection;
 pub mod spawn;
+pub mod tabswitcher;
 pub mod webgpu;
 use crate::spawn::SpawnWhere;
 use prevcursor::PrevCursorPos;
@@ -163,6 +164,8 @@ pub enum UIItemType {
     Split(PositionedSplit),
     /// A choice of the popup menu, by its index in the choices.
     PopupMenuItem(usize),
+    /// A tile of the tab switcher, by its tab's index.
+    TabSwitcherTile(usize),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3166,6 +3169,10 @@ impl TermWindow {
                         top_level: split.top_level,
                     }),
                 );
+            }
+            ShowTabSwitcher(step) => {
+                let modal = crate::termwindow::tabswitcher::TabSwitcher::new(self, *step);
+                self.set_modal(Rc::new(modal));
             }
             PaneSelect(args) => {
                 let modal = crate::termwindow::paneselect::PaneSelector::new(self, args);

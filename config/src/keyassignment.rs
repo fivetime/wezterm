@@ -605,6 +605,11 @@ pub enum KeyAssignment {
     ScrollToTop,
     ScrollToBottom,
     ShowTabNavigator,
+    /// A grid of the window's tabs with their screens, the choice moved
+    /// by this step from the active tab and by further Ctrl+Tab /
+    /// Ctrl+Shift+Tab or arrows; releasing Ctrl (or Enter) activates it,
+    /// Escape leaves the tabs as they are.
+    ShowTabSwitcher(isize),
     ShowDebugOverlay,
     HideApplication,
     QuitApplication,

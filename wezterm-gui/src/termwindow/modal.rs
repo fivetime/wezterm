@@ -29,6 +29,16 @@ pub trait Modal: Downcast {
         mods: KeyModifiers,
         term_window: &mut TermWindow,
     ) -> anyhow::Result<bool>;
+    /// A key released while the modal is up (the tab switcher's Ctrl);
+    /// true when the modal took it.
+    fn key_up(
+        &self,
+        _key: KeyCode,
+        _mods: KeyModifiers,
+        _term_window: &mut TermWindow,
+    ) -> anyhow::Result<bool> {
+        Ok(false)
+    }
     fn computed_element(
         &self,
         term_window: &mut TermWindow,

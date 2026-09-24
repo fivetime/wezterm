@@ -102,7 +102,8 @@ impl super::TermWindow {
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
             | UIItemType::Split(_)
-            | UIItemType::PopupMenuItem(_) => {}
+            | UIItemType::PopupMenuItem(_)
+            | UIItemType::TabSwitcherTile(_) => {}
         }
     }
 
@@ -114,7 +115,8 @@ impl super::TermWindow {
             | UIItemType::BelowScrollThumb
             | UIItemType::ScrollThumb
             | UIItemType::Split(_)
-            | UIItemType::PopupMenuItem(_) => {}
+            | UIItemType::PopupMenuItem(_)
+            | UIItemType::TabSwitcherTile(_) => {}
         }
     }
 
@@ -481,8 +483,9 @@ impl super::TermWindow {
             UIItemType::CloseTab(idx) => {
                 self.mouse_event_close_tab(idx, event, context);
             }
-            // the popup menu takes its events before they get here
-            UIItemType::PopupMenuItem(_) => {}
+            // the popup menu and the tab switcher take their events
+            // before they get here
+            UIItemType::PopupMenuItem(_) | UIItemType::TabSwitcherTile(_) => {}
         }
     }
 
