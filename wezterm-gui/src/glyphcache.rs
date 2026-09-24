@@ -565,6 +565,9 @@ pub struct GlyphCache {
     frame_cache: HashMap<[u8; 32], Sprite>,
     line_glyphs: HashMap<LineKey, Sprite>,
     pub block_glyphs: HashMap<SizedBlockKey, Sprite>,
+    /// SVG icons by file and pixel size; `None` for a file that would not
+    /// draw, so it is not read again
+    icon_glyphs: HashMap<(String, u32), Option<Sprite>>,
     pub cursor_glyphs: HashMap<(Option<CursorShape>, u8), Sprite>,
     pub color: HashMap<(RgbColor, NotNan<f32>), Sprite>,
     min_frame_duration: Duration,
@@ -588,6 +591,7 @@ impl GlyphCache {
             atlas,
             line_glyphs: HashMap::new(),
             block_glyphs: HashMap::new(),
+            icon_glyphs: HashMap::new(),
             cursor_glyphs: HashMap::new(),
             color: HashMap::new(),
             min_frame_duration: Duration::from_millis(1000 / fonts.config().max_fps as u64),
@@ -617,6 +621,7 @@ impl GlyphCache {
             atlas,
             line_glyphs: HashMap::new(),
             block_glyphs: HashMap::new(),
+            icon_glyphs: HashMap::new(),
             cursor_glyphs: HashMap::new(),
             color: HashMap::new(),
             min_frame_duration: Duration::from_millis(1000 / fonts.config().max_fps as u64),
@@ -1134,6 +1139,24 @@ impl GlyphCache {
         Ok(sprite)
     }
 
+    /// The SVG icon at `path` drawn `size` pixels square, as a white mask
+    /// (its coverage); `None`, logged once, when it cannot be drawn.
+    pub fn cached_icon(&mut self, path: &str, size: u32) -> anyhow::Result<Option<Sprite>> {
+        let key = (path.to_string(), size);
+        if let Some(sprite) = self.icon_glyphs.get(&key) {
+            return Ok(sprite.clone());
+        }
+        let sprite = match icon_image(path, size) {
+            Ok(image) => Some(self.atlas.allocate(&image)?),
+            Err(err) => {
+                log::warn!("icon {path}: {err:#}");
+                None
+            }
+        };
+        self.icon_glyphs.insert(key, sprite.clone());
+        Ok(sprite)
+    }
+
     pub fn cached_block(
         &mut self,
         block: BlockKey,
@@ -1373,4 +1396,32 @@ impl GlyphCache {
 
         self.line_sprite(key, metrics)
     }
+}
+
+/// An SVG file rasterised `size` pixels square (aspect kept, centred),
+/// as a white mask: every pixel's colour is its coverage, the way the
+/// custom block glyphs are drawn.
+fn icon_image(path: &str, size: u32) -> anyhow::Result<Image> {
+    use resvg::{tiny_skia, usvg};
+    let data = std::fs::read(path)?;
+    let tree = usvg::Tree::from_data(&data, &usvg::Options::default())?;
+    let mut pixmap =
+        tiny_skia::Pixmap::new(size.max(1), size.max(1)).context("no pixmap for the icon")?;
+    let (width, height) = (tree.size().width(), tree.size().height());
+    let scale = size as f32 / width.max(height);
+    let transform = tiny_skia::Transform::from_row(
+        scale,
+        0.,
+        0.,
+        scale,
+        (size as f32 - width * scale) / 2.,
+        (size as f32 - height * scale) / 2.,
+    );
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
+    let mask = pixmap
+        .data()
+        .chunks_exact(4)
+        .flat_map(|pixel| [pixel[3]; 4])
+        .collect();
+    Ok(Image::from_raw(size as usize, size as usize, mask))
 }

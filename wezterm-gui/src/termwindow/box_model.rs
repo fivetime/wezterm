@@ -394,7 +394,15 @@ impl Element {
 pub enum ElementContent {
     Text(String),
     Children(Vec<Element>),
-    Poly { line_width: isize, poly: SizedPoly },
+    Poly {
+        line_width: isize,
+        poly: SizedPoly,
+    },
+    /// An SVG file drawn as a mask in the text colour, `size` square
+    Icon {
+        path: String,
+        size: Dimension,
+    },
 }
 
 pub struct LayoutContext<'a> {
@@ -441,7 +449,7 @@ impl ComputedElement {
                 }
             }
             ComputedElementContent::Text(_) => {}
-            ComputedElementContent::Poly { .. } => {}
+            ComputedElementContent::Poly { .. } | ComputedElementContent::Icon { .. } => {}
         }
     }
 
@@ -469,7 +477,7 @@ impl ComputedElement {
                     kid.ui_item_impl(items);
                 }
             }
-            ComputedElementContent::Poly { .. } => {}
+            ComputedElementContent::Poly { .. } | ComputedElementContent::Icon { .. } => {}
         }
     }
 }
@@ -481,6 +489,10 @@ pub enum ComputedElementContent {
     Poly {
         line_width: isize,
         poly: PixelSizedPoly,
+    },
+    Icon {
+        path: String,
+        size: f32,
     },
 }
 
@@ -821,6 +833,29 @@ impl super::TermWindow {
                     },
                 })
             }
+            ElementContent::Icon { path, size } => {
+                let size = size.evaluate_as_pixels(context.width).round();
+                let content_rect = euclid::rect(0., 0., size, size.max(min_height));
+                let rects = element.compute_rects(context, content_rect);
+
+                Ok(ComputedElement {
+                    item_type: element.item_type.clone(),
+                    zindex: element.zindex + context.zindex,
+                    baseline,
+                    border,
+                    border_corners,
+                    colors: element.colors.clone(),
+                    hover_colors: element.hover_colors.clone(),
+                    bounds: rects.bounds,
+                    border_rect: rects.border_rect,
+                    padding: rects.padding,
+                    content_rect: rects.content_rect,
+                    content: ComputedElementContent::Icon {
+                        path: path.clone(),
+                        size,
+                    },
+                })
+            }
         }
     }
 
@@ -938,6 +973,16 @@ impl super::TermWindow {
                         euclid::size2(poly.width, poly.height),
                         LinearRgba::TRANSPARENT,
                     )?;
+                    self.resolve_text(colors, inherited_colors).apply(&mut quad);
+                }
+            }
+            ComputedElementContent::Icon { path, size } => {
+                // centred in the content box, whose height the row may
+                // have stretched
+                let top = element.content_rect.min_y()
+                    + ((element.content_rect.height() - size) / 2.).max(0.);
+                let origin = euclid::point2(element.content_rect.min_x(), top.round());
+                if let Some(mut quad) = self.icon_quad(&mut layers, 1, origin, path, *size)? {
                     self.resolve_text(colors, inherited_colors).apply(&mut quad);
                 }
             }

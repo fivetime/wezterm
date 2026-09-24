@@ -286,6 +286,43 @@ impl crate::TermWindow {
         Ok(quad)
     }
 
+    /// A quad showing the SVG icon at `path`, `size` pixels square, as a
+    /// mask for the caller to colour; `None` when the file cannot be drawn.
+    pub fn icon_quad<'a>(
+        &self,
+        layers: &'a mut TripleLayerQuadAllocator,
+        layer_num: usize,
+        point: PointF,
+        path: &str,
+        size: f32,
+    ) -> anyhow::Result<Option<QuadImpl<'a>>> {
+        let left_offset = self.dimensions.pixel_width as f32 / 2.;
+        let top_offset = self.dimensions.pixel_height as f32 / 2.;
+        let gl_state = self.render_state.as_ref().unwrap();
+        let sprite = match gl_state
+            .glyph_cache
+            .borrow_mut()
+            .cached_icon(path, size as u32)?
+        {
+            Some(sprite) => sprite.texture_coords(),
+            None => return Ok(None),
+        };
+
+        let mut quad = layers.allocate(layer_num)?;
+        quad.set_position(
+            point.x - left_offset,
+            point.y - top_offset,
+            (point.x + size) - left_offset,
+            (point.y + size) - top_offset,
+        );
+        quad.set_texture(sprite);
+        quad.set_fg_color(LinearRgba::TRANSPARENT);
+        quad.set_alt_color_and_mix_value(LinearRgba::TRANSPARENT, 0.);
+        quad.set_hsv(None);
+        quad.set_has_color(false);
+        Ok(Some(quad))
+    }
+
     pub fn poly_quad<'a>(
         &self,
         layers: &'a mut TripleLayerQuadAllocator,

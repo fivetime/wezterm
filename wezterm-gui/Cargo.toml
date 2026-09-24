@@ -86,6 +86,8 @@ termwiz.workspace = true
 textwrap.workspace = true
 thiserror.workspace = true
 tiny-skia.workspace = true
+# the desktop's SVG icons for the window buttons
+resvg = { version = "0.45", default-features = false }
 umask.workspace = true
 unicode-normalization.workspace = true
 unicode-segmentation.workspace = true

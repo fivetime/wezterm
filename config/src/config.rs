@@ -99,6 +99,14 @@ pub struct Config {
     #[dynamic(default)]
     pub integrated_title_button_layout: Option<String>,
 
+    /// The desktop's own icons for the integrated title buttons: SVG files
+    /// keyed `close`, `minimize`, `maximize` and `restore` (the icon
+    /// theme's `window-close-symbolic` and so on). Each is drawn as a
+    /// mask in the button's colour; a button without one keeps the
+    /// style's drawn symbol.
+    #[dynamic(default)]
+    pub integrated_title_button_icons: HashMap<String, String>,
+
     #[dynamic(default)]
     pub integrated_title_button_style: IntegratedTitleButtonStyle,
 
