@@ -41,9 +41,10 @@ pub const HIGHLIGHT: f32 = 0.16;
 /// (gfx::kFaviconSize, kTabPreTitlePadding).
 pub const FAVICON: f32 = 16.;
 pub const FAVICON_GAP: f32 = 8.;
-/// The header bar's padding before the strip when no button stands
-/// there (GTK themes' usual 6).
-pub const LEADING: f32 = 6.;
+/// The strip's last DIP lies under the toolbar (kTabstripToolbarOverlap):
+/// only `VISIBLE` of it shows, and the terminal begins there.
+pub const OVERLAP: f32 = 1.;
+pub const VISIBLE: f32 = STRIP_HEIGHT - OVERLAP;
 /// A highlight's height: the tab's 35 less the strip's padding and the
 /// toolbar overlap (kTabHeight - kTabStripPadding - kTabstripToolbarOverlap).
 pub const HIGHLIGHT_HEIGHT: f32 = 28.;
@@ -129,6 +130,27 @@ pub fn hover(active: SrgbaTuple, frame: SrgbaTuple) -> SrgbaTuple {
     blend(active, frame, HOVER)
 }
 
+/// Where the tab title's baseline lies, in pixels from the strip's top:
+/// Chrome centres the cap height of a label spanning the whole 41-DIP tab
+/// (RenderText::DetermineBaselineCenteringText), in whole pixels of the
+/// font's rounded-up ascent, descent and cap height. Without a cap
+/// height the whole font height is centred, as Chrome does.
+pub fn title_baseline(ascent: f32, descent: f32, cap_height: Option<f32>, scale: f32) -> f32 {
+    let a = ascent.ceil();
+    let h = a + descent.ceil();
+    // without a cap height Chrome centres the whole font height (its
+    // GetCapHeight then answers the ascent: no internal leading)
+    let (k, leading) = match cap_height {
+        Some(c) => (c.ceil(), a - c.ceil()),
+        None => (a, 0.),
+    };
+    let display = (STRIP_HEIGHT * scale).round();
+    let space = display - if leading != 0. { k } else { h };
+    let shift = (space / 2.).trunc() - leading;
+    let (min, max) = ((display - h).min(0.), (display - h).abs());
+    a + shift.clamp(min, max)
+}
+
 /// Where Chrome paints a hovered inactive tab (PathType::kHighlight): a
 /// rounded rectangle from the body's top over its width, 28 DIP tall, its
 /// corners the tab's top radius or less for a narrow tab (a third of the
@@ -179,6 +201,20 @@ pub fn shape(w: u32, h: u32, top: f32, foot: f32, outline: bool) -> window::bitm
     let top = top.min((wf - 2. * foot) / 2.).min(hf - foot).max(0.);
     let k = 0.552_284_8;
     let mut pb = PathBuilder::new();
+    // an outline is drawn half a pixel in, with its radii half a pixel
+    // smaller, so the stroke lies on the shape's edge (Chrome's stroke
+    // adjustment)
+    let (x0, x1, y0, tp, ft) = if outline {
+        (
+            0.5,
+            wf - 0.5,
+            0.5,
+            (top - 0.5).max(0.),
+            (foot - 0.5).max(0.),
+        )
+    } else {
+        (0., wf, 0., top, foot)
+    };
     if foot == 0. && !outline {
         // no feet: a rounded rectangle (the hover highlight)
         let r = top.min(wf / 2.).min(hf / 2.);
@@ -193,28 +229,28 @@ pub fn shape(w: u32, h: u32, top: f32, foot: f32, outline: bool) -> window::bitm
         pb.cubic_to(0., r - k * r, r - k * r, 0., r, 0.);
         pb.close();
     } else {
-        pb.move_to(0., hf);
-        pb.cubic_to(k * foot, hf, foot, hf - foot + k * foot, foot, hf - foot);
-        pb.line_to(foot, top);
+        pb.move_to(x0, hf);
+        pb.cubic_to(x0 + k * ft, hf, x0 + ft, hf - ft + k * ft, x0 + ft, hf - ft);
+        pb.line_to(x0 + ft, y0 + tp);
         pb.cubic_to(
-            foot,
-            top - k * top,
-            foot + top - k * top,
-            0.,
-            foot + top,
-            0.,
+            x0 + ft,
+            y0 + tp - k * tp,
+            x0 + ft + tp - k * tp,
+            y0,
+            x0 + ft + tp,
+            y0,
         );
-        pb.line_to(wf - foot - top, 0.);
+        pb.line_to(x1 - ft - tp, y0);
         pb.cubic_to(
-            wf - foot - top + k * top,
-            0.,
-            wf - foot,
-            top - k * top,
-            wf - foot,
-            top,
+            x1 - ft - tp + k * tp,
+            y0,
+            x1 - ft,
+            y0 + tp - k * tp,
+            x1 - ft,
+            y0 + tp,
         );
-        pb.line_to(wf - foot, hf - foot);
-        pb.cubic_to(wf - foot, hf - foot + k * foot, wf - k * foot, hf, wf, hf);
+        pb.line_to(x1 - ft, hf - ft);
+        pb.cubic_to(x1 - ft, hf - ft + k * ft, x1 - k * ft, hf, x1, hf);
         if !outline {
             pb.close();
         }
@@ -227,18 +263,11 @@ pub fn shape(w: u32, h: u32, top: f32, foot: f32, outline: bool) -> window::bitm
     paint.set_color(tiny_skia::Color::WHITE);
     paint.anti_alias = true;
     if outline {
-        // half a pixel in, so the stroke lies on the shape's edge
         let stroke = Stroke {
             width: 1.,
             ..Default::default()
         };
-        pixmap.stroke_path(
-            &path,
-            &paint,
-            &stroke,
-            Transform::from_translate(0., 0.5),
-            None,
-        );
+        pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
     } else {
         pixmap.fill_path(
             &path,
@@ -310,6 +339,25 @@ mod tests {
         let oa = |x: usize, y: usize| o.pixel_data_slice()[(y * 80 + x) * 4 + 3];
         assert_eq!(oa(40, 15), 0, "an outline is hollow");
         assert!(oa(40, 0) > 0, "and runs along the top");
+    }
+
+    #[test]
+    fn the_titles_baseline() {
+        // Noto Sans CJK SC at 15 px: ascent 17.4, descent 4.3, cap 10.7 ->
+        // Chrome's 18 + clamp((41 - 11) / 2 - (18 - 11), 0, 18) = 26
+        assert_eq!(title_baseline(17.4, 4.3, Some(10.7), 1.), 26.);
+        // no cap height: the font's whole height centred
+        assert_eq!(
+            title_baseline(17.4, 4.3, None, 1.),
+            18. + 9.,
+            "the 23-px font centred"
+        );
+        // a font taller than the tab is pushed no further than it must be
+        assert_eq!(
+            title_baseline(40., 10., Some(30.), 1.),
+            35.,
+            "a shift of 5 - 10, within the -9..9 the tab allows"
+        );
     }
 
     #[test]

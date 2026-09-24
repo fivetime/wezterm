@@ -2313,6 +2313,18 @@ pub struct TitleButtonImages {
     pub margin_left: f64,
     #[dynamic(default)]
     pub margin_right: f64,
+    /// Its CSS margins above and below, and the header bar's padding above
+    /// and below its buttons: the Chrome tab strip places the picture as
+    /// GTK's header bar would (NavButtonProviderGtk), shrinking it when it
+    /// would not fit the strip.
+    #[dynamic(default)]
+    pub margin_top: f64,
+    #[dynamic(default)]
+    pub margin_bottom: f64,
+    #[dynamic(default)]
+    pub header_top: f64,
+    #[dynamic(default)]
+    pub header_bottom: f64,
 }
 
 /// A window's edge as the desktop theme draws it (Chromium's

@@ -345,6 +345,38 @@ impl XWindowInner {
                 ],
             });
         }
+        // where the window is opaque, for the compositor: the content but
+        // for its round corners (Chrome's UpdateFrameHints)
+        let corner = if restored { u32::from(radius) } else { 0 }
+            .min(u32::from(inner.0) / 2)
+            .min(u32::from(inner.1));
+        let (l, t, w, h) = (
+            u32::from(insets.left),
+            u32::from(insets.top),
+            u32::from(inner.0),
+            u32::from(inner.1),
+        );
+        let opaque: Vec<u32> = if corner == 0 {
+            vec![l, t, w, h]
+        } else {
+            vec![
+                l,
+                t + corner,
+                w,
+                h - corner,
+                l + corner,
+                t,
+                w - 2 * corner,
+                corner,
+            ]
+        };
+        conn.send_request_no_reply_log(&xcb::x::ChangeProperty {
+            mode: PropMode::Replace,
+            window: self.window_id,
+            property: conn.atom_net_wm_opaque_region,
+            r#type: xcb::x::ATOM_CARDINAL,
+            data: &opaque,
+        });
         // clicks on the shadow fall through, but for the resize band
         if insets.is_empty() {
             conn.send_request_no_reply_log(&xcb::shape::Mask {

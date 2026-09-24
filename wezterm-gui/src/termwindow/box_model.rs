@@ -797,9 +797,11 @@ impl super::TermWindow {
                             kid.translate(euclid::vec2(0., pixel_height - kid.bounds.height()));
                         }
                         VerticalAlign::Middle => {
+                            // on a whole pixel, so text and pictures are
+                            // not resampled across rows
                             kid.translate(euclid::vec2(
                                 0.,
-                                (pixel_height - kid.bounds.height()) / 2.0,
+                                ((pixel_height - kid.bounds.height()) / 2.0).round(),
                             ));
                         }
                         VerticalAlign::Top => {}

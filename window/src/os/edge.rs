@@ -298,7 +298,8 @@ pub fn side_at(x: i32, y: i32, outer: (u16, u16), insets: Insets, band: u16) -> 
     if x < l - band || x >= r + band || y < t - band || y >= b + band {
         return None;
     }
-    let corner = band * 2;
+    // Chrome's corners reach 16 DIP along the edges for its 10-DIP band
+    let corner = (f64::from(band) * 1.6).round() as i32;
     let (left, right) = (x < l + corner, x >= r - corner);
     let (top, bottom) = (y < t + corner, y >= b - corner);
     Some(match (left, right, top, bottom) {

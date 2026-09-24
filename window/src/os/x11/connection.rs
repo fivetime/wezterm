@@ -98,6 +98,7 @@ pub struct XConnection {
     pub atom_net_active_window: Atom,
     pub atom_wm_change_state: Atom,
     pub atom_gtk_frame_extents: Atom,
+    pub atom_net_wm_opaque_region: Atom,
     pub(crate) xrm: RefCell<HashMap<String, String>>,
     pub(crate) windows: RefCell<HashMap<xcb::x::Window, Arc<Mutex<XWindowInner>>>>,
     pub(crate) child_to_parent_id: RefCell<HashMap<xcb::x::Window, xcb::x::Window>>,
@@ -492,6 +493,19 @@ impl XConnection {
         {
             return false;
         }
+        // Xfwm4 places a window by its shadow (Chrome's one exception,
+        // crbug.com/1260821)
+        if get_wm_name(
+            &self.conn,
+            self.root,
+            self.atom_net_supporting_wm_check,
+            self.atom_net_wm_name,
+            self.atom_utf8_string,
+        )
+        .is_ok_and(|name| name == "Xfwm4")
+        {
+            return false;
+        }
         let Ok(cm) = Self::intern_atom(&self.conn, &format!("_NET_WM_CM_S{}", self.screen_num))
         else {
             return false;
@@ -740,6 +754,7 @@ impl XConnection {
         let atom_net_active_window = Self::intern_atom(&conn, "_NET_ACTIVE_WINDOW")?;
         let atom_wm_change_state = Self::intern_atom(&conn, "WM_CHANGE_STATE")?;
         let atom_gtk_frame_extents = Self::intern_atom(&conn, "_GTK_FRAME_EXTENTS")?;
+        let atom_net_wm_opaque_region = Self::intern_atom(&conn, "_NET_WM_OPAQUE_REGION")?;
 
         let has_randr = conn.active_extensions().any(|e| e == xcb::Extension::RandR);
 
@@ -878,6 +893,7 @@ impl XConnection {
             atom_net_active_window,
             atom_wm_change_state,
             atom_gtk_frame_extents,
+            atom_net_wm_opaque_region,
             atom_net_wm_icon,
             keyboard,
             kbd_ev,
