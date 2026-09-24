@@ -115,6 +115,13 @@ pub struct Config {
     #[dynamic(default)]
     pub integrated_title_button_images: HashMap<String, TitleButtonImages>,
 
+    /// The window's own edge as the desktop theme draws it — its shadow,
+    /// border and rounded top corners — for a window with
+    /// `INTEGRATED_BUTTONS` on X11 under a compositing window manager
+    /// that knows `_GTK_FRAME_EXTENTS`; see `WindowEdge`.
+    #[dynamic(default)]
+    pub integrated_window_edge: Option<WindowEdge>,
+
     #[dynamic(default)]
     pub integrated_title_button_style: IntegratedTitleButtonStyle,
 
@@ -2289,4 +2296,32 @@ pub struct TitleButtonImages {
     pub margin_left: f64,
     #[dynamic(default)]
     pub margin_right: f64,
+}
+
+/// A window's edge as the desktop theme draws it (Chromium's
+/// WindowFrameProviderGtk): a square picture, `4 * slice` pixels at 96 dpi
+/// (drawn at any multiple of that), of a `2 * slice` square window in its
+/// middle with the theme's border and shadow around it; cut in nine —
+/// corners kept, edges stretched — around the window. Pixels at 96 dpi.
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct WindowEdge {
+    /// The picture for a focused window, and for one without the focus.
+    pub focused: String,
+    pub unfocused: String,
+    /// How far the drawing reaches outside the window on each side.
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub left: f64,
+    /// The top corners' radius.
+    #[dynamic(default)]
+    pub radius: f64,
+    pub slice: f64,
+    /// The band just outside the window that resizes it (Chrome's 10).
+    #[dynamic(default = "default_edge_input")]
+    pub input: f64,
+}
+
+fn default_edge_input() -> f64 {
+    10.
 }

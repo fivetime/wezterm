@@ -74,9 +74,10 @@ filedescriptor.workspace = true
 futures-lite.workspace = true
 futures-util.workspace = true
 libc.workspace = true
+image.workspace = true
 mio = {workspace=true, features=["os-ext"]}
 x11 = {workspace=true, features = ["xlib_xcb", "xlib"]}
-xcb = {workspace=true, features=["render", "randr", "dri2", "xkb", "xlib_xcb", "present", "as-raw-xcb-connection"]}
+xcb = {workspace=true, features=["render", "randr", "dri2", "xkb", "xlib_xcb", "present", "shape", "as-raw-xcb-connection"]}
 xcb-imdkit.workspace = true
 xkbcommon = { workspace=true, features = ["x11", "wayland"] }
 zbus.workspace = true

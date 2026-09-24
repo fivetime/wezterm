@@ -97,6 +97,7 @@ pub struct XConnection {
     pub atom_net_supporting_wm_check: Atom,
     pub atom_net_active_window: Atom,
     pub atom_wm_change_state: Atom,
+    pub atom_gtk_frame_extents: Atom,
     pub(crate) xrm: RefCell<HashMap<String, String>>,
     pub(crate) windows: RefCell<HashMap<xcb::x::Window, Arc<Mutex<XWindowInner>>>>,
     pub(crate) child_to_parent_id: RefCell<HashMap<xcb::x::Window, xcb::x::Window>>,
@@ -478,6 +479,28 @@ impl XConnection {
         self.update_net_supported();
     }
 
+    /// Whether a window may draw its own edge, shadow and all (see
+    /// `edge`): a compositing manager runs (someone owns
+    /// `_NET_WM_CM_S<screen>`), so the margins can be translucent, and the
+    /// window manager knows `_GTK_FRAME_EXTENTS`, so it places the window
+    /// by its content rather than its shadow.
+    pub(crate) fn supports_client_side_edge(&self) -> bool {
+        if !self
+            .supported
+            .borrow()
+            .contains(&self.atom_gtk_frame_extents)
+        {
+            return false;
+        }
+        let Ok(cm) = Self::intern_atom(&self.conn, &format!("_NET_WM_CM_S{}", self.screen_num))
+        else {
+            return false;
+        };
+        self.send_and_wait_request(&xcb::x::GetSelectionOwner { selection: cm })
+            .map(|reply| reply.owner() != xcb::x::Window::none())
+            .unwrap_or(false)
+    }
+
     fn update_net_supported(&self) {
         if let Ok(reply) = self.send_and_wait_request(&xcb::x::GetProperty {
             delete: false,
@@ -716,6 +739,7 @@ impl XConnection {
         let atom_net_supporting_wm_check = Self::intern_atom(&conn, "_NET_SUPPORTING_WM_CHECK")?;
         let atom_net_active_window = Self::intern_atom(&conn, "_NET_ACTIVE_WINDOW")?;
         let atom_wm_change_state = Self::intern_atom(&conn, "WM_CHANGE_STATE")?;
+        let atom_gtk_frame_extents = Self::intern_atom(&conn, "_GTK_FRAME_EXTENTS")?;
 
         let has_randr = conn.active_extensions().any(|e| e == xcb::Extension::RandR);
 
@@ -853,6 +877,7 @@ impl XConnection {
             atom_net_supporting_wm_check,
             atom_net_active_window,
             atom_wm_change_state,
+            atom_gtk_frame_extents,
             atom_net_wm_icon,
             keyboard,
             kbd_ev,

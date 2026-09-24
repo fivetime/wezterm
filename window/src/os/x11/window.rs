@@ -110,6 +110,21 @@ pub(crate) struct XWindowInner {
     dragging: bool,
     outstanding_configure_requests: usize,
     pending_finished_resizes: usize,
+    /// The desktop theme's edge around the content (see `edge`), where
+    /// this window draws its own.
+    edge: Option<super::edge::Edge>,
+    /// The margins it takes now: none maximized or full screen. `width`
+    /// and `height` are the content's; the X window is this much larger.
+    insets: super::edge::Insets,
+    /// The X window's own size.
+    outer: (u16, u16),
+    /// What the margins were last painted for: size, insets, focus, dpi.
+    edge_painted: Option<((u16, u16), super::edge::Insets, bool, u64)>,
+    edge_gc: Option<xcb::x::Gcontext>,
+    /// The cursor the GUI last asked for, and whether the pointer is on
+    /// the margins, showing a resize cursor of ours instead.
+    gui_cursor: Option<CursorIcon>,
+    on_edge: bool,
 }
 
 /// <https://specifications.freedesktop.org/wm-spec/wm-spec-latest.html#idm46409506331616>
@@ -236,6 +251,10 @@ impl XWindowInner {
     }
 
     fn set_cursor(&mut self, cursor: Option<CursorIcon>) -> anyhow::Result<()> {
+        self.gui_cursor = cursor;
+        if self.on_edge {
+            return Ok(());
+        }
         self.cursors.set_cursor(self.window_id, cursor)
     }
 
@@ -272,11 +291,234 @@ impl XWindowInner {
             .send_request_no_reply_log(&xcb::x::ConfigureWindow {
                 window: self.child_id,
                 value_list: &[
+                    xcb::x::ConfigWindow::X(i32::from(self.insets.left)),
+                    xcb::x::ConfigWindow::Y(i32::from(self.insets.top)),
                     xcb::x::ConfigWindow::Width(width as u32),
                     xcb::x::ConfigWindow::Height(height as u32),
                 ],
             });
         // send_request_no_reply_log() is synchronous, so no further synchronization required
+    }
+
+    fn restored(state: WindowState) -> bool {
+        !state.intersects(WindowState::MAXIMIZED | WindowState::FULL_SCREEN)
+    }
+
+    /// Fits the content into an `outer`-sized X window in `state`: the
+    /// edge's margins taken off (none without an edge, or maximized),
+    /// the child placed and shaped, the window manager told; the
+    /// content's size. The margins are painted when anything they show
+    /// changed.
+    fn fit(&mut self, outer: (u16, u16), state: WindowState, dpi: f64) -> (u16, u16) {
+        self.outer = outer;
+        let Some(edge) = self.edge.as_ref() else {
+            return outer;
+        };
+        let scale = dpi / 96.;
+        let restored = Self::restored(state);
+        let insets = edge.insets(scale, restored);
+        let (radius, band) = (edge.radius(scale), edge.band(scale));
+        let inner = (
+            outer.0.saturating_sub(insets.left + insets.right).max(1),
+            outer.1.saturating_sub(insets.top + insets.bottom).max(1),
+        );
+        self.insets = insets;
+        let conn = self.conn();
+        // where the window really is, for the window manager
+        let extents = conn.atom_gtk_frame_extents;
+        if insets.is_empty() {
+            conn.send_request_no_reply_log(&xcb::x::DeleteProperty {
+                window: self.window_id,
+                property: extents,
+            });
+        } else {
+            conn.send_request_no_reply_log(&xcb::x::ChangeProperty {
+                mode: PropMode::Replace,
+                window: self.window_id,
+                property: extents,
+                r#type: xcb::x::ATOM_CARDINAL,
+                data: &[
+                    u32::from(insets.left),
+                    u32::from(insets.right),
+                    u32::from(insets.top),
+                    u32::from(insets.bottom),
+                ],
+            });
+        }
+        // clicks on the shadow fall through, but for the resize band
+        if insets.is_empty() {
+            conn.send_request_no_reply_log(&xcb::shape::Mask {
+                operation: xcb::shape::So::Set,
+                destination_kind: xcb::shape::Sk::Input,
+                destination_window: self.window_id,
+                x_offset: 0,
+                y_offset: 0,
+                source_bitmap: xcb::x::Pixmap::none(),
+            });
+        } else {
+            let x = i32::from(insets.left) - i32::from(band);
+            let y = i32::from(insets.top) - i32::from(band);
+            conn.send_request_no_reply_log(&xcb::shape::Rectangles {
+                operation: xcb::shape::So::Set,
+                destination_kind: xcb::shape::Sk::Input,
+                ordering: xcb::x::ClipOrdering::Unsorted,
+                destination_window: self.window_id,
+                x_offset: 0,
+                y_offset: 0,
+                rectangles: &[xcb::x::Rectangle {
+                    x: x.max(0) as i16,
+                    y: y.max(0) as i16,
+                    width: (i32::from(inner.0) + 2 * i32::from(band)).min(i32::from(outer.0))
+                        as u16,
+                    height: (i32::from(inner.1) + 2 * i32::from(band)).min(i32::from(outer.1))
+                        as u16,
+                }],
+            });
+        }
+        // the content's top corners cut, for the round ones painted
+        // beneath (restored only)
+        let r = if restored {
+            radius.min(inner.0 / 2).min(inner.1)
+        } else {
+            0
+        };
+        if r == 0 {
+            conn.send_request_no_reply_log(&xcb::shape::Mask {
+                operation: xcb::shape::So::Set,
+                destination_kind: xcb::shape::Sk::Bounding,
+                destination_window: self.child_id,
+                x_offset: 0,
+                y_offset: 0,
+                source_bitmap: xcb::x::Pixmap::none(),
+            });
+        } else {
+            conn.send_request_no_reply_log(&xcb::shape::Rectangles {
+                operation: xcb::shape::So::Set,
+                destination_kind: xcb::shape::Sk::Bounding,
+                ordering: xcb::x::ClipOrdering::Unsorted,
+                destination_window: self.child_id,
+                x_offset: 0,
+                y_offset: 0,
+                rectangles: &[
+                    xcb::x::Rectangle {
+                        x: r as i16,
+                        y: 0,
+                        width: inner.0 - 2 * r,
+                        height: r,
+                    },
+                    xcb::x::Rectangle {
+                        x: 0,
+                        y: r as i16,
+                        width: inner.0,
+                        height: inner.1 - r,
+                    },
+                ],
+            });
+        }
+        self.resize_child(u32::from(inner.0), u32::from(inner.1));
+        self.paint_edge(dpi);
+        inner
+    }
+
+    /// Paints the margins (and the round top corners) with the theme's
+    /// edge, focused or not, unless they show that already.
+    fn paint_edge(&mut self, dpi: f64) {
+        let focused = self.has_focus.unwrap_or(true);
+        let key = (self.outer, self.insets, focused, dpi.to_bits());
+        if self.edge.is_none() || self.edge_painted == Some(key) {
+            return;
+        }
+        self.edge_painted = Some(key);
+        let header: config::SrgbaTuple = if focused {
+            self.config.window_frame.active_titlebar_bg.into()
+        } else {
+            self.config.window_frame.inactive_titlebar_bg.into()
+        };
+        let header = [header.0, header.1, header.2, header.3];
+        let (outer, insets) = (self.outer, self.insets);
+        let rects = match self.edge.as_mut() {
+            Some(edge) => edge.paint(focused, outer, insets, dpi / 96., header),
+            None => return,
+        };
+        let conn = self.conn();
+        let gc = match self.edge_gc {
+            Some(gc) => gc,
+            None => {
+                let gc = conn.generate_id();
+                conn.send_request_no_reply_log(&xcb::x::CreateGc {
+                    cid: gc,
+                    drawable: xcb::x::Drawable::Window(self.window_id),
+                    value_list: &[],
+                });
+                self.edge_gc = Some(gc);
+                gc
+            }
+        };
+        for (x, y, w, _h, data) in rects {
+            // a few rows per request, well inside any request size limit
+            let row = usize::from(w) * 4;
+            let rows = (256 * 1024 / row.max(1)).max(1);
+            for (i, chunk) in data.chunks(row * rows).enumerate() {
+                conn.send_request_no_reply_log(&xcb::x::PutImage {
+                    format: xcb::x::ImageFormat::ZPixmap,
+                    drawable: xcb::x::Drawable::Window(self.window_id),
+                    gc,
+                    width: w,
+                    height: (chunk.len() / row) as u16,
+                    dst_x: x as i16,
+                    dst_y: (usize::from(y) + i * rows) as i16,
+                    left_pad: 0,
+                    depth: 32,
+                    data: chunk,
+                });
+            }
+        }
+        let _ = conn.flush();
+    }
+
+    /// Pointer coordinates in the X window to the content's; on the
+    /// margins `None`, after showing the resize cursor for the band there
+    /// (or the plain one past it, on the shadow).
+    fn to_content(&mut self, x: i16, y: i16) -> Option<(isize, isize)> {
+        if self.insets.is_empty() {
+            return Some((x.into(), y.into()));
+        }
+        let (cx, cy) = (
+            isize::from(x) - self.insets.left as isize,
+            isize::from(y) - self.insets.top as isize,
+        );
+        let inside = cx >= 0 && cy >= 0 && cx < self.width as isize && cy < self.height as isize;
+        if inside {
+            if self.on_edge {
+                self.on_edge = false;
+                let _ = self.cursors.set_cursor(self.window_id, self.gui_cursor);
+            }
+            return Some((cx, cy));
+        }
+        let band = self
+            .edge
+            .as_ref()
+            .map(|e| e.band(self.dpi / 96.))
+            .unwrap_or_default();
+        let side = super::edge::side_at(x.into(), y.into(), self.outer, self.insets, band);
+        let cursor = side.map(|side| {
+            use crate::ResizeEdge as E;
+            match side {
+                E::TopLeft => CursorIcon::NwResize,
+                E::Top => CursorIcon::NResize,
+                E::TopRight => CursorIcon::NeResize,
+                E::Right => CursorIcon::EResize,
+                E::BottomRight => CursorIcon::SeResize,
+                E::Bottom => CursorIcon::SResize,
+                E::BottomLeft => CursorIcon::SwResize,
+                E::Left => CursorIcon::WResize,
+            }
+        });
+        self.on_edge = true;
+        let _ = self
+            .cursors
+            .set_cursor(self.window_id, cursor.or(Some(CursorIcon::Default)));
+        None
     }
 
     pub fn dispatch_pending_events(&mut self) -> anyhow::Result<()> {
@@ -368,15 +610,17 @@ impl XWindowInner {
                     );
 
                     let window_state = self.get_window_state().unwrap_or(WindowState::default());
+                    let (width, height) =
+                        self.fit((geom.width(), geom.height()), window_state, self.dpi);
 
-                    if self.width != geom.width()
-                        || self.height != geom.height()
+                    if self.width != width
+                        || self.height != height
                         || self.last_wm_state != window_state
                     {
-                        self.resize_child(geom.width() as u32, geom.height() as u32);
+                        self.resize_child(width as u32, height as u32);
 
-                        self.width = geom.width();
-                        self.height = geom.height();
+                        self.width = width;
+                        self.height = height;
                         self.last_wm_state = window_state;
 
                         self.events.dispatch(WindowEvent::Resized {
@@ -468,9 +712,31 @@ impl XWindowInner {
             }
         };
 
+        let Some((x, y)) = self.to_content(event_x, event_y) else {
+            // the margins: the band resizes, the window manager does it
+            if matches!(kind, MouseEventKind::Press(MousePress::Left)) {
+                let band = self
+                    .edge
+                    .as_ref()
+                    .map(|e| e.band(self.dpi / 96.))
+                    .unwrap_or_default();
+                if let Some(side) = super::edge::side_at(
+                    event_x.into(),
+                    event_y.into(),
+                    self.outer,
+                    self.insets,
+                    band,
+                ) {
+                    self.window_drag_position =
+                        Some(ScreenPoint::new(root_x.into(), root_y.into()));
+                    self.request_drag_resize(side)?;
+                }
+            }
+            return Ok(());
+        };
         let event = MouseEvent {
             kind,
-            coords: Point::new(event_x.try_into().unwrap(), event_y.try_into().unwrap()),
+            coords: Point::new(x, y),
             screen_coords: ScreenPoint::new(root_x.try_into().unwrap(), root_y.try_into().unwrap()),
             modifiers: xkeysyms::modifiers_from_state(state.bits()),
             mouse_buttons: MouseButtons::default(),
@@ -520,6 +786,10 @@ impl XWindowInner {
                 dpi = value;
             }
         }
+
+        // the X window's size in, the content's from here on
+        let state = self.get_window_state().unwrap_or(WindowState::default());
+        let (width, height) = self.fit((width, height), state, dpi);
 
         if width == self.width && height == self.height && dpi == self.dpi {
             // Effectively unchanged; perhaps it was simply moved?
@@ -689,6 +959,13 @@ impl XWindowInner {
     pub fn dispatch_event(&mut self, event: &Event) -> anyhow::Result<()> {
         let conn = self.conn();
         match event {
+            Event::X(xcb::x::Event::Expose(expose)) if expose.window() == self.window_id => {
+                // the margins, which are ours to paint
+                if expose.count() == 0 {
+                    self.edge_painted = None;
+                    self.paint_edge(self.dpi);
+                }
+            }
             Event::X(xcb::x::Event::Expose(expose)) => {
                 self.expose(
                     expose.x(),
@@ -719,12 +996,12 @@ impl XWindowInner {
                     .process_key_release_event(key_release, &mut self.events);
             }
             Event::X(xcb::x::Event::MotionNotify(motion)) => {
+                let Some((x, y)) = self.to_content(motion.event_x(), motion.event_y()) else {
+                    return Ok(());
+                };
                 let event = MouseEvent {
                     kind: MouseEventKind::Move,
-                    coords: Point::new(
-                        motion.event_x().try_into().unwrap(),
-                        motion.event_y().try_into().unwrap(),
-                    ),
+                    coords: Point::new(x, y),
                     screen_coords: ScreenPoint::new(
                         motion.root_x().try_into().unwrap(),
                         motion.root_y().try_into().unwrap(),
@@ -873,6 +1150,7 @@ impl XWindowInner {
             self.update_ime_position();
             log::trace!("Calling focus_change({focused})");
             self.events.dispatch(WindowEvent::FocusChanged(focused));
+            self.paint_edge(self.dpi);
         }
     }
 
@@ -1394,6 +1672,30 @@ impl XWindow {
 
         let mut events = WindowEventSender::new(event_handler);
 
+        // the desktop theme's edge, where this window may draw its own
+        let edge = config
+            .integrated_window_edge
+            .as_ref()
+            .filter(|_| {
+                config
+                    .window_decorations
+                    .contains(WindowDecorations::INTEGRATED_BUTTONS)
+                    && conn.supports_client_side_edge()
+            })
+            .and_then(|c| match super::edge::Edge::load(c) {
+                Ok(edge) => Some(edge),
+                Err(err) => {
+                    log::warn!("window edge: {err:#}");
+                    None
+                }
+            });
+        let insets = edge
+            .as_ref()
+            .map(|e| e.insets(conn.default_dpi() / 96., true))
+            .unwrap_or_default();
+        let outer_width = width + usize::from(insets.left + insets.right);
+        let outer_height = height + usize::from(insets.top + insets.bottom);
+
         let window_id;
         let child_id;
         let window = {
@@ -1421,8 +1723,8 @@ impl XWindow {
                 parent: screen.root(),
                 x: x.unwrap_or(0).try_into()?,
                 y: y.unwrap_or(0).try_into()?,
-                width: width.try_into()?,
-                height: height.try_into()?,
+                width: outer_width.try_into()?,
+                height: outer_height.try_into()?,
                 border_width: 0,
                 class: xcb::x::WindowClass::InputOutput,
                 visual: conn.visual.visual_id(),
@@ -1442,7 +1744,9 @@ impl XWindow {
                             | xcb::x::EventMask::BUTTON_MOTION
                             | xcb::x::EventMask::KEY_RELEASE
                             | xcb::x::EventMask::PROPERTY_CHANGE
-                            | xcb::x::EventMask::STRUCTURE_NOTIFY,
+                            | xcb::x::EventMask::STRUCTURE_NOTIFY
+                            // the margins, painted by us
+                            | xcb::x::EventMask::EXPOSURE,
                     ),
                     xcb::x::Cw::Colormap(color_map_id),
                 ],
@@ -1453,8 +1757,8 @@ impl XWindow {
                 depth: conn.depth,
                 wid: child_id,
                 parent: window_id,
-                x: 0,
-                y: 0,
+                x: insets.left as i16,
+                y: insets.top as i16,
                 width: width.try_into()?,
                 height: height.try_into()?,
                 border_width: 0,
@@ -1507,6 +1811,13 @@ impl XWindow {
                 dragging: false,
                 outstanding_configure_requests: 0,
                 pending_finished_resizes: 0,
+                edge,
+                insets,
+                outer: (outer_width.try_into()?, outer_height.try_into()?),
+                edge_painted: None,
+                edge_gc: None,
+                gui_cursor: None,
+                on_edge: false,
             }))
         };
 
@@ -1729,7 +2040,7 @@ impl XWindowInner {
         let _ = self.adjust_decorations(config.window_decorations);
 
         if dpi_changed {
-            let _ = self.configure_notify("config reload", self.width, self.height);
+            let _ = self.configure_notify("config reload", self.outer.0, self.outer.1);
         }
     }
 
@@ -2091,13 +2402,16 @@ impl WindowOps for XWindow {
 
     fn set_inner_size(&self, width: usize, height: usize) {
         XConnection::with_window_inner(self.0, move |inner| {
+            let i = inner.insets;
             inner
                 .conn()
                 .send_request_no_reply_log(&xcb::x::ConfigureWindow {
                     window: inner.window_id,
                     value_list: &[
-                        xcb::x::ConfigWindow::Width(width as u32),
-                        xcb::x::ConfigWindow::Height(height as u32),
+                        xcb::x::ConfigWindow::Width((width + usize::from(i.left + i.right)) as u32),
+                        xcb::x::ConfigWindow::Height(
+                            (height + usize::from(i.top + i.bottom)) as u32,
+                        ),
                     ],
                 });
             inner.resize_child(width as u32, height as u32);

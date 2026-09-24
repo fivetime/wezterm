@@ -2,6 +2,7 @@
 
 pub mod connection;
 pub mod cursor;
+pub(crate) mod edge;
 pub mod keyboard;
 pub mod window;
 pub mod xcb_util;
