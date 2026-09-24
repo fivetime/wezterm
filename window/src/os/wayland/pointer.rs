@@ -3,9 +3,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use smithay_client_toolkit::compositor::SurfaceData;
-use smithay_client_toolkit::reexports::csd_frame::{DecorationsFrame, FrameClick};
+use smithay_client_toolkit::reexports::csd_frame::{
+    DecorationsFrame, FrameAction, FrameClick, ResizeEdge,
+};
 use smithay_client_toolkit::seat::pointer::{
-    PointerData, PointerDataExt, PointerEvent, PointerEventKind, PointerHandler,
+    CursorIcon, PointerData, PointerDataExt, PointerEvent, PointerEventKind, PointerHandler,
 };
 use wayland_client::backend::ObjectId;
 use wayland_client::protocol::wl_pointer::{ButtonState, WlPointer};
@@ -202,6 +204,67 @@ impl WaylandState {
 
         for evt in events {
             let surface = &evt.surface;
+            // a window's own edge: its resize band
+            let edge_owner = windows
+                .iter()
+                .find(|(_, w)| {
+                    w.borrow()
+                        .edge
+                        .as_ref()
+                        .is_some_and(|e| e.surface.id() == surface.id())
+                })
+                .map(|(id, _)| *id);
+            if let Some(wid) = edge_owner {
+                let mut inner = windows.get(&wid).unwrap().borrow_mut();
+                let side = inner.edge.as_ref().and_then(|e| {
+                    let (x, y) = evt.position;
+                    let px = |v: f64| (v * f64::from(e.scale)) as i32;
+                    crate::os::edge::side_at(px(x), px(y), e.outer, e.insets, e.band)
+                });
+                match evt.kind {
+                    PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                        use crate::ResizeEdge as E;
+                        let cursor = match side {
+                            Some(E::TopLeft) => CursorIcon::NwResize,
+                            Some(E::Top) => CursorIcon::NResize,
+                            Some(E::TopRight) => CursorIcon::NeResize,
+                            Some(E::Right) => CursorIcon::EResize,
+                            Some(E::BottomRight) => CursorIcon::SeResize,
+                            Some(E::Bottom) => CursorIcon::SResize,
+                            Some(E::BottomLeft) => CursorIcon::SwResize,
+                            Some(E::Left) => CursorIcon::WResize,
+                            None => CursorIcon::Default,
+                        };
+                        if let Some(themed) = self.pointer.as_ref() {
+                            use crate::ConnectionOps;
+                            let conn = crate::Connection::get().unwrap().wayland();
+                            let _ = themed.set_cursor(&conn.connection, cursor);
+                        }
+                    }
+                    PointerEventKind::Press {
+                        button: 0x110,
+                        serial,
+                        ..
+                    } => {
+                        if let Some(side) = side {
+                            use crate::ResizeEdge as E;
+                            let edge = match side {
+                                E::TopLeft => ResizeEdge::TopLeft,
+                                E::Top => ResizeEdge::Top,
+                                E::TopRight => ResizeEdge::TopRight,
+                                E::Right => ResizeEdge::Right,
+                                E::BottomRight => ResizeEdge::BottomRight,
+                                E::Bottom => ResizeEdge::Bottom,
+                                E::BottomLeft => ResizeEdge::BottomLeft,
+                                E::Left => ResizeEdge::Left,
+                            };
+                            inner.frame_action(pointer, serial, FrameAction::Resize(edge));
+                        }
+                    }
+                    _ => {}
+                }
+                continue;
+            }
             if surface.id() == self.active_surface_id.borrow().as_ref().unwrap().clone() {
                 let (x, y) = evt.position;
                 let parent_surface = match evt.surface.data::<SurfaceData>() {

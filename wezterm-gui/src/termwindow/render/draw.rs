@@ -1,4 +1,5 @@
 use crate::colorease::ColorEaseUniform;
+use crate::renderstate::ERASE_ZINDEX;
 use crate::termwindow::webgpu::ShaderUniform;
 use crate::termwindow::RenderFrame;
 use crate::uniforms::UniformBuilder;
@@ -126,7 +127,11 @@ impl crate::TermWindow {
                         projection,
                     });
 
-                    render_pass.set_pipeline(&webgpu.render_pipeline);
+                    render_pass.set_pipeline(if layer.zindex() == ERASE_ZINDEX {
+                        &webgpu.erase_pipeline
+                    } else {
+                        &webgpu.render_pipeline
+                    });
                     render_pass.set_bind_group(0, &uniforms, &[]);
                     render_pass.set_bind_group(1, &texture_linear_bind_group, &[]);
                     render_pass.set_bind_group(2, &texture_nearest_bind_group, &[]);
@@ -208,6 +213,9 @@ impl crate::TermWindow {
             ..Default::default()
         };
 
+        // no blending: ERASE_ZINDEX's quads replace what is beneath
+        let replacing = glium::DrawParameters::default();
+
         // Clamp and use the nearest texel rather than interpolate.
         // This prevents things like the box cursor outlines from
         // being randomly doubled in width or height
@@ -259,7 +267,9 @@ impl crate::TermWindow {
                         vb.indices.glium().slice(0..index_count).unwrap(),
                         gl_state.glyph_prog.as_ref().unwrap(),
                         &uniforms,
-                        if subpixel_aa {
+                        if layer.zindex() == ERASE_ZINDEX {
+                            &replacing
+                        } else if subpixel_aa {
                             &dual_source_blending
                         } else {
                             &alpha_blending

@@ -95,6 +95,40 @@ impl Edge {
         (f, u)
     }
 
+    /// The whole picture of an `outer`-sized window's edge, as one buffer
+    /// of premultiplied BGRA (wl_shm ARGB8888), the content's own place in
+    /// it clear but for the round top corners: what a subsurface beneath
+    /// the content shows.
+    pub fn paint_all(
+        &mut self,
+        focused: bool,
+        outer: (u16, u16),
+        insets: Insets,
+        scale: f64,
+        header: [f32; 4],
+    ) -> Vec<u8> {
+        let radius = self.radius(scale);
+        let (pf, pu) = self.pictures(scale);
+        let picture = if focused { pf } else { pu };
+        let geometry = Geometry::new(outer, insets, picture.width(), radius);
+        let (inner_w, inner_h) = geometry.inner();
+        let (l, t) = (insets.left, insets.top);
+        let mut data = Vec::with_capacity(usize::from(outer.0) * usize::from(outer.1) * 4);
+        for y in 0..outer.1 {
+            for x in 0..outer.0 {
+                let inside = x >= l && x < l + inner_w && y >= t && y < t + inner_h;
+                let corner =
+                    y < t + radius && (x < l + radius || x >= l + inner_w - radius.min(inner_w));
+                if inside && !corner {
+                    data.extend([0; 4]);
+                } else {
+                    data.extend(geometry.pixel(picture, x, y, header));
+                }
+            }
+        }
+        data
+    }
+
     /// The pixels of the margins (and the rounded top corners) of an
     /// `outer`-sized window with `insets` around its content, as
     /// rectangles of premultiplied BGRA (a 32-bit X visual's order on a

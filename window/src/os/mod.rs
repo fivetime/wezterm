@@ -3,6 +3,9 @@ pub mod windows;
 #[cfg(windows)]
 pub use self::windows::*;
 
+/// A window's own edge (shadow, border, round top corners), X11 and Wayland alike
+#[cfg(all(unix, not(target_os = "macos")))]
+pub(crate) mod edge;
 #[cfg(feature = "wayland")]
 pub mod wayland;
 pub mod x11;

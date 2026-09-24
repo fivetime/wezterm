@@ -283,6 +283,44 @@ impl WaylandWindow {
             );
         }
 
+        // the desktop theme's edge, where the window draws its own
+        let edge = config
+            .integrated_window_edge
+            .as_ref()
+            .filter(|_| {
+                config
+                    .window_decorations
+                    .contains(WindowDecorations::INTEGRATED_BUTTONS)
+                    && !config.window_decorations.contains(WindowDecorations::TITLE)
+            })
+            .and_then(|c| match crate::os::edge::Edge::load(c) {
+                Ok(edge) => Some(edge),
+                Err(err) => {
+                    log::warn!("window edge: {err:#}");
+                    None
+                }
+            })
+            .map(|edge| {
+                let wayland_state = conn.wayland_state.borrow();
+                let (subsurface, edge_surface) = wayland_state
+                    .subcompositor
+                    .create_subsurface(surface.clone(), &qh);
+                subsurface.place_below(&surface);
+                WaylandEdge {
+                    edge,
+                    surface: edge_surface,
+                    subsurface,
+                    buffer: None,
+                    painted: None,
+                    insets: Default::default(),
+                    band: 0,
+                    scale: 1,
+                    outer: (0, 0),
+                    restored: true,
+                    focused: true,
+                }
+            });
+
         window.set_min_size(Some((32, 32)));
         let (x, y) = window_frame.location();
         let surface_width = dimensions.pixels_to_surface(dimensions.pixel_width as i32);
@@ -335,6 +373,7 @@ impl WaylandWindow {
             wegl_surface: None,
             gl_state: None,
             ext_background_effect_surface: None,
+            edge,
         }));
 
         let window_handle = Window::Wayland(WaylandWindow(window_id));
@@ -581,6 +620,29 @@ pub(crate) fn read_pipe_with_timeout(mut file: ReadPipe) -> anyhow::Result<Strin
     Ok(String::from_utf8(result)?)
 }
 
+/// The window's own edge on Wayland (see `crate::os::edge`): a subsurface
+/// beneath the content reaching out by the margins, painted with the
+/// theme's border and shadow and the round top corners' header colour
+/// (the renderer clears the content's corners over them); its input
+/// region the resize band. The window geometry stays the content's, so
+/// the compositor places the window by it, shadow aside.
+pub(super) struct WaylandEdge {
+    edge: crate::os::edge::Edge,
+    pub(super) surface: WlSurface,
+    subsurface: wayland_client::protocol::wl_subsurface::WlSubsurface,
+    buffer: Option<smithay_client_toolkit::shm::slot::Buffer>,
+    /// What it shows: the content's size in pixels, focus, scale.
+    painted: Option<((i32, i32), bool, i32)>,
+    /// The margins and the resize band in pixels at `scale`.
+    pub(super) insets: crate::os::edge::Insets,
+    pub(super) band: u16,
+    pub(super) scale: i32,
+    pub(super) outer: (u16, u16),
+    /// The window is restored and focused, as the last configure said.
+    restored: bool,
+    focused: bool,
+}
+
 pub struct WaylandWindowInner {
     pub(crate) events: WindowEventSender,
     surface_factor: f64,
@@ -614,9 +676,101 @@ pub struct WaylandWindowInner {
     wegl_surface: Option<WlEglSurface>,
     gl_state: Option<Rc<glium::backend::Context>>,
     ext_background_effect_surface: Option<ExtBackgroundEffectSurfaceV1>,
+    pub(super) edge: Option<WaylandEdge>,
 }
 
 impl WaylandWindowInner {
+    /// Paints the edge for the content's size and the last configure's
+    /// state, or takes it away when the window is not restored.
+    fn update_edge(&mut self) {
+        let scale = SurfaceUserData::from_wl(self.surface())
+            .surface_data
+            .scale_factor();
+        let content = (
+            self.dimensions.pixel_width as i32,
+            self.dimensions.pixel_height as i32,
+        );
+        let header: config::SrgbaTuple = {
+            let focused = self.edge.as_ref().map(|e| e.focused).unwrap_or(true);
+            if focused {
+                self.config.window_frame.active_titlebar_bg.into()
+            } else {
+                self.config.window_frame.inactive_titlebar_bg.into()
+            }
+        };
+        let Some(e) = self.edge.as_mut() else {
+            return;
+        };
+        if !e.restored {
+            if e.painted.take().is_some() {
+                e.surface.attach(None, 0, 0);
+                e.surface.commit();
+            }
+            return;
+        }
+        let key = (content, e.focused, scale);
+        if e.painted == Some(key) || content.0 <= 0 || content.1 <= 0 {
+            return;
+        }
+        let insets = e.edge.insets(f64::from(scale), true);
+        let band = e.edge.band(f64::from(scale));
+        let outer = (
+            (content.0 + i32::from(insets.left + insets.right)) as u16,
+            (content.1 + i32::from(insets.top + insets.bottom)) as u16,
+        );
+        let pixels = e.edge.paint_all(
+            e.focused,
+            outer,
+            insets,
+            f64::from(scale),
+            [header.0, header.1, header.2, header.3],
+        );
+        let conn = WaylandConnection::get().unwrap().wayland();
+        let qh = conn.event_queue.borrow().handle();
+        let wayland_state = conn.wayland_state.borrow();
+        let mut pool = wayland_state.mem_pool.borrow_mut();
+        let (w, h) = (i32::from(outer.0), i32::from(outer.1));
+        let Ok((buffer, canvas)) = pool.create_buffer(
+            w,
+            h,
+            w * 4,
+            wayland_client::protocol::wl_shm::Format::Argb8888,
+        ) else {
+            log::warn!("window edge: no buffer for {w}x{h}");
+            return;
+        };
+        // the slot may be larger than asked for
+        canvas[..pixels.len()].copy_from_slice(&pixels);
+        let s = |px: u16| i32::from(px) / scale;
+        e.surface.attach(Some(buffer.wl_buffer()), 0, 0);
+        e.surface.set_buffer_scale(scale);
+        e.surface.damage_buffer(0, 0, w, h);
+        e.subsurface.set_position(-s(insets.left), -s(insets.top));
+        // the resize band around the content; the shadow lets clicks through
+        let region = wayland_state
+            .compositor
+            .wl_compositor()
+            .create_region(&qh, GlobalData);
+        let (cw, ch) = (content.0 / scale, content.1 / scale);
+        let b = s(band);
+        region.add(
+            s(insets.left) - b,
+            s(insets.top) - b,
+            cw + 2 * b,
+            ch + 2 * b,
+        );
+        region.subtract(s(insets.left), s(insets.top), cw, ch);
+        e.surface.set_input_region(Some(&region));
+        region.destroy();
+        e.surface.commit();
+        e.buffer = Some(buffer);
+        e.painted = Some(key);
+        e.insets = insets;
+        e.band = band;
+        e.scale = scale;
+        e.outer = outer;
+    }
+
     fn close(&mut self) {
         self.events.dispatch(WindowEvent::Destroyed);
         self.window.take();
@@ -863,6 +1017,19 @@ impl WaylandWindowInner {
             self.window_frame.update_state(window_config.state);
             self.window_frame
                 .update_wm_capabilities(window_config.capabilities);
+            if let Some(edge) = self.edge.as_mut() {
+                let s = window_config.state;
+                // tiled, maximized or full screen: no shadow, no round corners
+                edge.restored = !s.intersects(
+                    SCTKWindowState::FULLSCREEN
+                        | SCTKWindowState::MAXIMIZED
+                        | SCTKWindowState::TILED_LEFT
+                        | SCTKWindowState::TILED_RIGHT
+                        | SCTKWindowState::TILED_TOP
+                        | SCTKWindowState::TILED_BOTTOM,
+                );
+                edge.focused = s.contains(SCTKWindowState::ACTIVATED);
+            }
         }
 
         if let Some((mut w, mut h)) = pending.configure.take() {
@@ -981,6 +1148,9 @@ impl WaylandWindowInner {
         }
         if pending.refresh_decorations && self.window.is_some() {
             self.refresh_frame();
+        }
+        if self.window.is_some() {
+            self.update_edge();
         }
         if pending.had_configure_event && self.window.is_some() {
             log::debug!("Had configured an event");
@@ -1414,6 +1584,15 @@ impl WaylandState {
                 }
                 if configure.state.contains(SCTKWindowState::MAXIMIZED) {
                     state |= WindowState::MAXIMIZED;
+                }
+                let tiled = configure.state.intersects(
+                    SCTKWindowState::TILED_LEFT
+                        | SCTKWindowState::TILED_RIGHT
+                        | SCTKWindowState::TILED_TOP
+                        | SCTKWindowState::TILED_BOTTOM,
+                );
+                if window_inner.borrow().edge.is_some() && state.can_resize() && !tiled {
+                    state |= WindowState::CLIENT_EDGE;
                 }
 
                 log::debug!(

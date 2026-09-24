@@ -276,7 +276,32 @@ impl crate::TermWindow {
             .context("paint_window_borders")?;
         drop(layers);
         self.paint_modal().context("paint_modal")?;
+        self.clear_edge_corners().context("clear_edge_corners")?;
 
+        Ok(())
+    }
+
+    /// A window drawing its own edge (`WindowState::CLIENT_EDGE`) shows
+    /// round top corners from beneath the content: the content's own
+    /// corners are cleared for them, last and replacing.
+    fn clear_edge_corners(&mut self) -> anyhow::Result<()> {
+        if !self.window_state.contains(window::WindowState::CLIENT_EDGE) {
+            return Ok(());
+        }
+        let Some(edge) = self.config.integrated_window_edge.as_ref() else {
+            return Ok(());
+        };
+        let r = (edge.radius * self.dimensions.dpi as f64 / 96.).round() as f32;
+        let width = self.dimensions.pixel_width as f32;
+        if r <= 0. || width < 2. * r {
+            return Ok(());
+        }
+        let gl_state = self.render_state.as_ref().unwrap();
+        let layer = gl_state.layer_for_zindex(crate::renderstate::ERASE_ZINDEX)?;
+        let mut layers = layer.quad_allocator();
+        let clear = window::color::LinearRgba::TRANSPARENT;
+        self.filled_rectangle(&mut layers, 0, euclid::rect(0., 0., r, r), clear)?;
+        self.filled_rectangle(&mut layers, 0, euclid::rect(width - r, 0., r, r), clear)?;
         Ok(())
     }
 }

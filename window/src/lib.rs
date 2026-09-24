@@ -122,6 +122,10 @@ bitflags! {
         const ALWAYS_ON_TOP = 1<<4;
         /// Always on bottom (docked) window
         const ALWAYS_ON_BOTTOM = 1<<5;
+        /// The window draws its own edge now (shadow, border, round top
+        /// corners; see `integrated_window_edge`): the content's top
+        /// corners are to be left clear, for the round ones beneath
+        const CLIENT_EDGE = 1<<6;
     }
 }
 

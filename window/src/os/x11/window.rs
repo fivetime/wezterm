@@ -112,14 +112,14 @@ pub(crate) struct XWindowInner {
     pending_finished_resizes: usize,
     /// The desktop theme's edge around the content (see `edge`), where
     /// this window draws its own.
-    edge: Option<super::edge::Edge>,
+    edge: Option<crate::os::edge::Edge>,
     /// The margins it takes now: none maximized or full screen. `width`
     /// and `height` are the content's; the X window is this much larger.
-    insets: super::edge::Insets,
+    insets: crate::os::edge::Insets,
     /// The X window's own size.
     outer: (u16, u16),
     /// What the margins were last painted for: size, insets, focus, dpi.
-    edge_painted: Option<((u16, u16), super::edge::Insets, bool, u64)>,
+    edge_painted: Option<((u16, u16), crate::os::edge::Insets, bool, u64)>,
     edge_gc: Option<xcb::x::Gcontext>,
     /// The cursor the GUI last asked for, and whether the pointer is on
     /// the margins, showing a resize cursor of ours instead.
@@ -500,7 +500,7 @@ impl XWindowInner {
             .as_ref()
             .map(|e| e.band(self.dpi / 96.))
             .unwrap_or_default();
-        let side = super::edge::side_at(x.into(), y.into(), self.outer, self.insets, band);
+        let side = crate::os::edge::side_at(x.into(), y.into(), self.outer, self.insets, band);
         let cursor = side.map(|side| {
             use crate::ResizeEdge as E;
             match side {
@@ -720,7 +720,7 @@ impl XWindowInner {
                     .as_ref()
                     .map(|e| e.band(self.dpi / 96.))
                     .unwrap_or_default();
-                if let Some(side) = super::edge::side_at(
+                if let Some(side) = crate::os::edge::side_at(
                     event_x.into(),
                     event_y.into(),
                     self.outer,
@@ -1497,6 +1497,9 @@ impl XWindowInner {
                 window_state |= WindowState::HIDDEN;
             }
         }
+        if self.edge.is_some() && Self::restored(window_state) {
+            window_state |= WindowState::CLIENT_EDGE;
+        }
 
         Ok(window_state)
     }
@@ -1682,7 +1685,7 @@ impl XWindow {
                     .contains(WindowDecorations::INTEGRATED_BUTTONS)
                     && conn.supports_client_side_edge()
             })
-            .and_then(|c| match super::edge::Edge::load(c) {
+            .and_then(|c| match crate::os::edge::Edge::load(c) {
                 Ok(edge) => Some(edge),
                 Err(err) => {
                     log::warn!("window edge: {err:#}");

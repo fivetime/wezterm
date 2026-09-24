@@ -457,7 +457,17 @@ pub struct RenderLayer {
     zindex: i8,
 }
 
+/// The layer drawn last and without blending: what it draws replaces the
+/// pixels beneath, colour and alpha, so a transparent quad there clears
+/// them (the content's top corners, for a window that draws its own
+/// round ones beneath; see `WindowState::CLIENT_EDGE`).
+pub const ERASE_ZINDEX: i8 = i8::MAX;
+
 impl RenderLayer {
+    pub fn zindex(&self) -> i8 {
+        self.zindex
+    }
+
     pub fn new(context: &RenderContext, num_quads: usize, zindex: i8) -> anyhow::Result<Self> {
         let vb = [
             Self::compute_vertices(context, 32)?,
