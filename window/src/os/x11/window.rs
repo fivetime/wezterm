@@ -120,6 +120,8 @@ pub(crate) struct XWindowInner {
     outer: (u16, u16),
     /// What the margins were last painted for: size, insets, focus, dpi.
     edge_painted: Option<((u16, u16), crate::os::edge::Insets, bool, u64)>,
+    /// Maximized one way: the edge is the resize band alone.
+    tiled: bool,
     edge_gc: Option<xcb::x::Gcontext>,
     /// The cursor the GUI last asked for, and whether the pointer is on
     /// the margins, showing a resize cursor of ours instead.
@@ -301,7 +303,7 @@ impl XWindowInner {
     }
 
     fn restored(state: WindowState) -> bool {
-        !state.intersects(WindowState::MAXIMIZED | WindowState::FULL_SCREEN)
+        !state.intersects(WindowState::MAXIMIZED | WindowState::FULL_SCREEN | WindowState::TILED)
     }
 
     /// Fits the content into an `outer`-sized X window in `state`: the
@@ -316,7 +318,15 @@ impl XWindowInner {
         };
         let scale = dpi / 96.;
         let restored = Self::restored(state);
-        let insets = edge.insets(scale, restored);
+        // tiled (maximized one way): the resize band, no shadow, no round
+        // corners, as Chrome keeps its frame then
+        let tiled = state.contains(WindowState::TILED);
+        self.tiled = tiled;
+        let insets = if tiled {
+            edge.band_insets(scale)
+        } else {
+            edge.insets(scale, restored)
+        };
         let (radius, band) = (edge.radius(scale), edge.band(scale));
         let inner = (
             outer.0.saturating_sub(insets.left + insets.right).max(1),
@@ -468,7 +478,9 @@ impl XWindowInner {
         };
         let header = [header.0, header.1, header.2, header.3];
         let (outer, insets) = (self.outer, self.insets);
+        let tiled = self.tiled;
         let rects = match self.edge.as_mut() {
+            Some(_) if tiled => crate::os::edge::Edge::clear(outer, insets),
             Some(edge) => edge.paint(focused, outer, insets, dpi / 96., header),
             None => return,
         };
@@ -1518,16 +1530,24 @@ impl XWindowInner {
         let state = reply.value::<u32>();
         let mut window_state = WindowState::default();
 
+        let (mut vert, mut horz) = (false, false);
         for &s in state {
             if s == conn.atom_state_fullscreen.resource_id() {
                 window_state |= WindowState::FULL_SCREEN;
-            } else if s == conn.atom_state_maximized_vert.resource_id()
-                || s == conn.atom_state_maximized_horz.resource_id()
-            {
-                window_state |= WindowState::MAXIMIZED;
+            } else if s == conn.atom_state_maximized_vert.resource_id() {
+                vert = true;
+            } else if s == conn.atom_state_maximized_horz.resource_id() {
+                horz = true;
             } else if s == conn.atom_state_hidden.resource_id() {
                 window_state |= WindowState::HIDDEN;
             }
+        }
+        // both ways is maximized; one way is tiled (Chrome's reading of
+        // the two hints)
+        if vert && horz {
+            window_state |= WindowState::MAXIMIZED;
+        } else if vert || horz {
+            window_state |= WindowState::TILED;
         }
         if self.edge.is_some() && Self::restored(window_state) {
             window_state |= WindowState::CLIENT_EDGE;
@@ -1850,6 +1870,7 @@ impl XWindow {
                 insets,
                 outer: (outer_width.try_into()?, outer_height.try_into()?),
                 edge_painted: None,
+                tiled: false,
                 edge_gc: None,
                 gui_cursor: None,
                 on_edge: false,

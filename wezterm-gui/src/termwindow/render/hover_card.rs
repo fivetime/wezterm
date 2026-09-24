@@ -23,13 +23,16 @@ use std::time::{Duration, Instant};
 use window::color::LinearRgba;
 use window::WindowOps;
 
-/// How long the pointer rests on a tab before its card shows.
+/// How long the pointer rests on a tab before its card shows, where the
+/// strip is not Chrome's (there Chrome's rule by the widest tab applies,
+/// chrome_strip::hover_card_delay_ms).
 const DELAY: Duration = Duration::from_millis(600);
 /// How long after that the card waits for the configuration's answer
 /// before it shows the tab's own title.
 const WAIT: Duration = Duration::from_millis(1000);
-/// The card's width in DIP, and how many of the screen's lines it shows.
-const WIDTH: f32 = 380.;
+/// The card's width in DIP (Chrome's: a standard tab's), and how many of
+/// the screen's lines it shows.
+const WIDTH: f32 = chrome_strip::HOVER_CARD_WIDTH;
 const LINES: usize = 6;
 
 /// The configuration's answer: `None` for the tab's own card (no handler,
@@ -40,6 +43,8 @@ pub struct TabHoverCard {
     tab_idx: usize,
     tab_id: TabId,
     since: Instant,
+    /// How long after `since` it shows.
+    delay: Duration,
     /// Once the configuration answered.
     answer: Option<Answer>,
     /// Once built: what it shows, or `None` for no card.
@@ -160,14 +165,36 @@ impl crate::TermWindow {
             return;
         };
         let since = Instant::now();
+        // Chrome waits by the widest tab in the strip
+        let delay = if self.config.tab_strip_style == config::TabStripStyle::Chrome {
+            self.fonts
+                .title_font()
+                .ok()
+                .and_then(|font| {
+                    let metrics = RenderMetrics::with_font_metrics(&font.metrics());
+                    self.chrome_layout(&font, &metrics).ok()
+                })
+                .map(|layout| {
+                    let widest = layout
+                        .tabs
+                        .iter()
+                        .map(|t| t.bounds_dip.w)
+                        .fold(0f32, f32::max);
+                    Duration::from_millis(chrome_strip::hover_card_delay_ms(widest) as u64)
+                })
+                .unwrap_or(DELAY)
+        } else {
+            DELAY
+        };
         self.tab_hover_card = Some(TabHoverCard {
             tab_idx: idx,
             tab_id,
             since,
+            delay,
             answer: None,
             content: None,
         });
-        self.update_next_frame_time(Some(since + DELAY));
+        self.update_next_frame_time(Some(since + delay));
 
         // ask now: the answer is there by the time the card shows
         let Some(window) = self.window.clone() else {
@@ -243,23 +270,27 @@ impl crate::TermWindow {
         if !self.config.show_tab_hover_cards || self.get_modal().is_some() {
             return Ok(());
         }
-        let Some((tab_idx, since, answer, built)) = self
-            .tab_hover_card
-            .as_ref()
-            .map(|c| (c.tab_idx, c.since, c.answer.clone(), c.content.is_some()))
-        else {
+        let Some((tab_idx, since, delay, answer, built)) = self.tab_hover_card.as_ref().map(|c| {
+            (
+                c.tab_idx,
+                c.since,
+                c.delay,
+                c.answer.clone(),
+                c.content.is_some(),
+            )
+        }) else {
             return Ok(());
         };
-        if since.elapsed() < DELAY {
-            self.update_next_frame_time(Some(since + DELAY));
+        if since.elapsed() < delay {
+            self.update_next_frame_time(Some(since + delay));
             return Ok(());
         }
         if !built {
             let answer = match answer {
                 Some(answer) => answer,
-                None if since.elapsed() < DELAY + WAIT => {
+                None if since.elapsed() < delay + WAIT => {
                     // the answer invalidates the window when it comes
-                    self.update_next_frame_time(Some(since + DELAY + WAIT));
+                    self.update_next_frame_time(Some(since + delay + WAIT));
                     return Ok(());
                 }
                 None => None,
@@ -405,8 +436,13 @@ impl crate::TermWindow {
             scale,
             (bg.0 + bg.1 + bg.2) / 3. < 0.2,
         );
-        let x = tab_x.min(window_w - width - 8. * scale).max(8. * scale) - left;
-        let y = tab_bottom + 4. * scale - top;
+        // where Chrome anchors it: the tab's own left edge (its foot,
+        // 9 DIP before the element's), 2 DIP up from the tab's bottom
+        let x = (tab_x - 9. * scale)
+            .min(window_w - width - 8. * scale)
+            .max(0.)
+            - left;
+        let y = tab_bottom - 2. * scale - top;
         let gl_state = self.render_state.as_ref().unwrap();
         let computed = self.compute_element(
             &LayoutContext {

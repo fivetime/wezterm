@@ -19,20 +19,9 @@ use window::RectF;
 /// The sizes and colour rules themselves live in the `chrome-strip` crate,
 /// where they are held against Chromium's numbers without a window.
 pub use chrome_strip::{
-    hover, stroke, BUTTON, FOOT, GAP, HIGHLIGHT_HEIGHT, HIGHLIGHT_OPACITY as HIGHLIGHT, INSET,
-    SEPARATOR_RADIUS, TOP_RADIUS,
+    hover_at, hover_fill, max_contrast, separator_opacity, stroke, Hover, CLOSE_HIGHLIGHT_RADIUS,
+    FOOT, GAP, HIGHLIGHT_OPACITY as HIGHLIGHT, INSET, SEPARATOR_RADIUS, TOP_RADIUS, WHITE,
 };
-
-/// Where Chrome paints a hovered inactive tab (PathType::kHighlight): a
-/// rounded rectangle from the body's top over its width, 28 DIP tall, its
-/// corners the tab's top radius or less for a narrow tab.
-pub fn highlight(body: RectF, scale: f32) -> (RectF, f32) {
-    let height = (HIGHLIGHT_HEIGHT * scale).round().min(body.height());
-    (
-        euclid::rect(body.min_x(), body.min_y(), body.width(), height),
-        chrome_strip::highlight_radius(body.width(), scale),
-    )
-}
 
 /// The tabs in a computed tab bar: their bodies, whether active, left to
 /// right.
@@ -178,15 +167,5 @@ mod tests {
         assert_eq!(alpha(0, 0), 0, "top corner");
         assert_eq!(alpha(0, 27), 0, "bottom corner too");
         assert_eq!(alpha(40, 27), 255, "flat along the bottom between");
-        // over the body, 28 DIP from its top, corners 10 but a third flat
-        let body = euclid::rect(100., 9., 300., 51.);
-        let (rect, radius) = highlight(body, 1.5);
-        assert_eq!(
-            (rect.min_x(), rect.min_y(), rect.width(), rect.height()),
-            (100., 9., 300., 42.)
-        );
-        assert_eq!(radius, 15.);
-        let (_, narrow) = highlight(euclid::rect(0., 0., 12., 51.), 1.5);
-        assert!(narrow < 15., "a narrow tab's corners smaller");
     }
 }

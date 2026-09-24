@@ -1,61 +1,87 @@
 //! Chromium's tab strip as it draws it over a Linux desktop theme: every
-//! size, position and colour rule, computed here in pixels from the
-//! inputs alone (the window's width, the scale, the tabs, the theme's
-//! buttons, the title font's metrics), with nothing to draw them.
+//! size, position, colour rule and animation, computed here in pixels from
+//! the inputs alone (the window's width, the scale, the tabs, the theme's
+//! caption buttons, the title font's metrics), with nothing to draw them.
 //!
 //! The renderer takes its numbers from `Layout`; the tests here hold
-//! them against Chromium's (layout_constants.cc, tab_style.cc,
-//! horizontal_tab_style_views.cc, tab.cc, nav_button_provider_gtk.cc,
-//! render_text.cc, tab_strip_color_mixer.cc), so a change is checked
-//! against Chrome on any machine, not by looking at a desktop.
+//! them against Chromium's, as read out of its source in
+//! `docs-internal/chrome-strip-spec.md` (layout_constants.cc,
+//! tab_style.cc, tab_strip_layout.cc, horizontal_tab_style_views.cc,
+//! tab.cc, nav_button_provider_gtk.cc, render_text.cc, color_utils.cc,
+//! tab_strip_color_mixer.cc, native_chrome_color_mixer_linux.cc), so a
+//! change is checked against Chrome on any machine, not by looking at a
+//! desktop.
 //!
-//! Sizes are DIP (pixels at 96 dpi) unless named `_px`; a DIP becomes
-//! pixels by `dip()`, rounded as Chrome rounds its layout to whole
-//! pixels.
+//! Sizes are DIP (pixels at 96 dpi) unless named `_px`. Chrome lays the
+//! strip out in whole DIP and turns them into pixels when it paints,
+//! rounding as `ScaleAndAlignBounds` does; `Layout` gives both.
 
 pub use wezterm_color_types::SrgbaTuple;
 
-/// The strip is 41 DIP (kTabStripHeight = kTabHeight 35 + kTabStripPadding
-/// 6), its last DIP under the toolbar (kTabstripToolbarOverlap): only
-/// `VISIBLE` shows, and the content begins there.
+// ---------------------------------------------------------------- DIP
+
+/// kTabStripHeight = kTabHeight (34 + kTabstripToolbarOverlap) +
+/// kTabStripPadding. The last DIP lies under Chrome's toolbar: here the
+/// terminal begins there, and the toolbar's top line is drawn on it.
 pub const STRIP_HEIGHT: f32 = 41.;
 pub const OVERLAP: f32 = 1.;
-pub const VISIBLE: f32 = STRIP_HEIGHT - OVERLAP;
-/// The tab shape starts this far below the strip's top (kTabStripPadding).
 pub const TAB_TOP: f32 = 6.;
-/// The hover highlight and the tab's contents: kTabHeight less the padding
-/// and the overlap.
+/// The highlight (a hovered inactive tab's fill) and the tab's contents:
+/// kTabHeight less the padding and the overlap.
 pub const HIGHLIGHT_HEIGHT: f32 = 28.;
 /// TabStyle::GetTopCornerRadius, GetBottomCornerRadius (the feet).
 pub const TOP_RADIUS: f32 = 10.;
 pub const FOOT: f32 = 12.;
-/// A tab's body between its feet: the standard width less the feet, and
-/// the narrowest.
-pub const BODY_MAX: f32 = 232.;
-pub const BODY_MIN: f32 = 32.;
-/// Between two bodies: 2 feet of 12 overlapping by 18.
-pub const GAP: f32 = 6.;
-/// The contents' inset from the body's edge (Chrome's 20 from the tab's).
-pub const INSET: f32 = 8.;
-/// TabStyle::GetSeparatorSize, its corner radius, and its row: centred on
-/// the highlight.
+/// A tab's width with its feet: standard (kTabWidth 232 + 2 feet), the
+/// least an active tab gets, the least an inactive one gets; tabs overlap
+/// by two feet less the separator and its margins.
+pub const TAB_STANDARD: f32 = 256.;
+pub const TAB_MIN_ACTIVE: f32 = 56.;
+pub const TAB_MIN_INACTIVE: f32 = 32.;
+pub const TAB_OVERLAP: f32 = 18.;
+/// Between two bodies (two feet less the overlap).
+pub const GAP: f32 = 2. * FOOT - TAB_OVERLAP;
+/// The contents' inset from the tab's edge (a foot + kTabHorizontalPadding
+/// 8) and from the body's.
+pub const CONTENT_INSET: f32 = 20.;
+pub const INSET: f32 = CONTENT_INSET - FOOT;
+/// TabStyle::GetSeparatorSize, its corner radius, its margins (6 above
+/// and below, 2 either side) and where it stands from the tab's edge.
 pub const SEPARATOR: (f32, f32) = (2., 16.);
 pub const SEPARATOR_RADIUS: f32 = 1.;
-/// The close and new-tab buttons: a 28-DIP circle around a 16-DIP icon;
-/// their highlight's opacity under the pointer.
-pub const BUTTON: f32 = 28.;
-pub const BUTTON_ICON: f32 = 16.;
-pub const HIGHLIGHT_OPACITY: f32 = 0.16;
-/// gfx::kFaviconSize and kTabPreTitlePadding after it.
+pub const SEPARATOR_FROM_EDGE: f32 = FOOT - 2. - 2.;
+/// gfx::kFaviconSize, kTabPreTitlePadding after it, kTabAfterTitlePadding
+/// before what follows the title.
 pub const FAVICON: f32 = 16.;
 pub const FAVICON_GAP: f32 = 8.;
-/// The first tab's body from the client edge, or past the caption
-/// buttons (the larger of this and their own margin).
-pub const LEADING: f32 = 12.;
-/// The strip's room after the last tab for the new-tab button.
-pub const NEW_TAB_MARGIN: f32 = 2.;
+pub const AFTER_TITLE: f32 = 4.;
+/// The close button: a 16-DIP icon in a 28-DIP button, whose hover
+/// highlight is a circle of radius 8 around the icon at opacity 0.16 of
+/// the colour that contrasts most with the tab.
+pub const CLOSE_ICON: f32 = 16.;
+pub const CLOSE_BUTTON: f32 = 28.;
+pub const CLOSE_HIGHLIGHT_RADIUS: f32 = 8.;
+pub const HIGHLIGHT_OPACITY: f32 = 0.16;
+/// An inactive tab shows its close button only with this much contents
+/// room (kMinimumContentsWidthForCloseButtons); a tab narrower than the
+/// least inactive width shows nothing.
+pub const CLOSE_ROOM: f32 = 68.;
+/// The new-tab button: a 28-DIP circle with a 16-DIP icon, 6 DIP past
+/// the last tab's right edge, on the tabs' row; the strip keeps 34 DIP
+/// for it.
+pub const NEW_TAB_BUTTON: f32 = 28.;
+pub const NEW_TAB_ICON: f32 = 16.;
+pub const NEW_TAB_AFTER_TABS: f32 = 6.;
+pub const NEW_TAB_ROOM: f32 = NEW_TAB_BUTTON + NEW_TAB_AFTER_TABS;
+/// The strip starts at the client edge, or past the leading caption
+/// buttons by their margin over this much (the region's leading margin).
+pub const LEADING_MARGIN: f32 = 12.;
+/// The header bar's top area the caption buttons are centred in.
+pub const TOP_AREA: f32 = STRIP_HEIGHT - OVERLAP;
+/// The hover animation: 200 ms, eased out in, eased in out.
+pub const HOVER_ANIMATION_MS: f32 = 200.;
 
-/// A rectangle in pixels.
+/// A rectangle in pixels (or DIP, where said).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rect {
     pub x: f32,
@@ -74,7 +100,17 @@ impl Rect {
     pub fn bottom(&self) -> f32 {
         self.y + self.h
     }
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        x >= self.x && x < self.right() && y >= self.y && y < self.bottom()
+    }
 }
+
+/// DIP to whole pixels at `scale`, as Chrome's layout rounds.
+pub fn dip(v: f32, scale: f32) -> f32 {
+    (v * scale).round()
+}
+
+// ---------------------------------------------------------------- inputs
 
 /// A caption button picture as the desktop's GTK theme drew it, with its
 /// CSS margins and the header bar's padding above and below it (DIP).
@@ -111,10 +147,12 @@ pub struct Inputs {
     /// The window's width in pixels.
     pub width_px: f32,
     pub tabs: usize,
+    pub active: usize,
     /// The caption buttons on each side, in their order from the edge.
     pub left_buttons: Vec<ButtonImage>,
     pub right_buttons: Vec<ButtonImage>,
-    /// The room drawn caption buttons take when there are no pictures.
+    /// The room drawn caption buttons take on the right when there are no
+    /// pictures (DIP).
     pub drawn_buttons: f32,
     pub close_buttons: bool,
     pub favicons: bool,
@@ -125,8 +163,9 @@ impl Default for Inputs {
     fn default() -> Inputs {
         Inputs {
             scale: 1.,
-            width_px: 1000.,
+            width_px: 1100.,
             tabs: 1,
+            active: 0,
             left_buttons: vec![],
             right_buttons: vec![],
             drawn_buttons: 0.,
@@ -143,84 +182,79 @@ impl Default for Inputs {
     }
 }
 
-/// A caption button picture placed in the top area: its picture scaled
-/// by `factor` to fit, its top at `top` px from the strip's top.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PlacedButton {
-    pub factor: f32,
-    pub width: f32,
-    pub height: f32,
-    pub margin_left: f32,
-    pub margin_right: f32,
-    pub top: f32,
+// ---------------------------------------------------------------- widths
+
+/// Chrome's tab widths (with their feet) for `tabs` tabs sharing
+/// `available` DIP (tab_strip_layout.cc CalculateTabBounds): every tab
+/// at its standard width when they fit; else all the same, between the
+/// 56 both kinds cross at and 256; below that the active tab keeps 56
+/// and the others shrink to 32. Widths are floored and the DIP left
+/// over given one each to the first tabs.
+pub fn tab_widths(available: f32, tabs: usize, active: usize) -> Vec<f32> {
+    if tabs == 0 {
+        return vec![];
+    }
+    let (min, cross, pref): (Vec<f32>, Vec<f32>, Vec<f32>) = (0..tabs)
+        .map(|i| {
+            if i == active {
+                (TAB_MIN_ACTIVE, TAB_MIN_ACTIVE, TAB_STANDARD)
+            } else {
+                (TAB_MIN_INACTIVE, TAB_MIN_ACTIVE, TAB_STANDARD)
+            }
+        })
+        .fold((vec![], vec![], vec![]), |mut acc, (a, b, c)| {
+            acc.0.push(a);
+            acc.1.push(b);
+            acc.2.push(c);
+            acc
+        });
+    let total = |w: &[f32]| w.iter().map(|w| w - TAB_OVERLAP).sum::<f32>() + TAB_OVERLAP;
+    let (min_w, cross_w, pref_w) = (total(&min), total(&cross), total(&pref));
+    let (f, lo, hi) = if available < cross_w {
+        let f = if min_w == cross_w {
+            1.
+        } else {
+            (available - min_w) / (cross_w - min_w)
+        };
+        (f, min, cross)
+    } else {
+        let f = if pref_w == cross_w {
+            1.
+        } else {
+            (available - cross_w) / (pref_w - cross_w)
+        };
+        (f, cross, pref)
+    };
+    let f = f.clamp(0., 1.);
+    let mut widths: Vec<f32> = (0..tabs)
+        .map(|i| (lo[i] + (hi[i] - lo[i]) * f).floor())
+        .collect();
+    let at_preferred = available >= cross_w && f == 1.;
+    let used = total(&widths);
+    let mut extra = available - used;
+    if !at_preferred && extra > 0. {
+        for (i, w) in widths.iter_mut().enumerate() {
+            if extra < 1. {
+                break;
+            }
+            if f != 0. && f != 1. && lo[i] < hi[i] {
+                *w += 1.;
+                extra -= 1.;
+            }
+        }
+    }
+    widths
 }
 
-/// The strip in pixels.
-#[derive(Clone, Debug, PartialEq)]
-pub struct Layout {
-    pub scale: f32,
-    /// The visible strip: the content begins at this row.
-    pub height: f32,
-    /// A tab's row (its highlight, and what it holds), below the strip's top.
-    pub tab_top: f32,
-    pub tab_height: f32,
-    /// The gap kept below the tab row to the visible strip's bottom.
-    pub tab_bottom_gap: f32,
-    /// A tab body's width, the same for all.
-    pub body_width: f32,
-    /// The room before the first body: from the client edge, or from the
-    /// caption buttons on the left.
-    pub lead: f32,
-    /// Each body's left edge, in order.
-    pub bodies: Vec<f32>,
-    /// The feet either side of a body, and the top corner radius.
-    pub foot: f32,
-    pub top_radius: f32,
-    /// The highlight's corner radius for this body width.
-    pub highlight_radius: f32,
-    /// The favicon within a body (x from the body's left), and the title's
-    /// left after it.
-    pub favicon: Option<Rect>,
-    pub title_left: f32,
-    /// The title's width at most, and its top below the tab row's top so
-    /// its baseline lies where Chrome's label puts it.
-    pub title_width: f32,
-    pub title_top: f32,
-    pub title_baseline: f32,
-    /// The close button within a body: its left from the body's left, its
-    /// size (a circle).
-    pub close: Option<Rect>,
-    /// A separator between two bodies: its offset from the gap's middle,
-    /// its size, its top below the strip's top.
-    pub separator: Rect,
-    /// The new-tab button after the last body.
-    pub new_tab: Rect,
-    /// The caption buttons placed.
-    pub left_placed: Vec<PlacedButton>,
-    pub right_placed: Vec<PlacedButton>,
+/// The top corners' radius for a tab `width` DIP wide (with its feet):
+/// the ideal 10, or less so a third of the top stays flat
+/// (GetTopCornerRadiusForWidth).
+pub fn top_radius_for_width(width: f32) -> f32 {
+    let top_width = (width - 2. * TOP_RADIUS).floor();
+    (top_width / 3.).clamp(0., TOP_RADIUS)
 }
 
-/// DIP to whole pixels at `scale`, as Chrome's layout rounds.
-pub fn dip(v: f32, scale: f32) -> f32 {
-    (v * scale).round()
-}
-
-/// A tab body's width for `tabs` sharing `room` pixels: Chrome's standard
-/// width when there is room, else shared out, never narrower than the
-/// minimum.
-pub fn body_width(room: f32, tabs: usize, scale: f32) -> f32 {
-    let each = room / tabs.max(1) as f32 - dip(GAP, scale);
-    each.clamp(dip(BODY_MIN, scale), dip(BODY_MAX, scale))
-        .floor()
-}
-
-/// The highlight's corner radius for a tab `body_px` wide: the top radius,
-/// or less for a narrow tab so a third of its top stays flat
-/// (GetTopCornerRadiusForWidth, over the width with the feet).
-pub fn highlight_radius(body_px: f32, scale: f32) -> f32 {
-    let width = body_px / scale + 2. * FOOT;
-    ((width - 2. * TOP_RADIUS) / 3.).clamp(0., TOP_RADIUS) * scale
-}
+// ---------------------------------------------------------------- text
 
 /// Where the title's baseline lies below the strip's top, in pixels:
 /// Chrome centres the cap height of a label spanning the whole 41-DIP tab
@@ -242,23 +276,36 @@ pub fn title_baseline(font: &FontMetrics, scale: f32) -> f32 {
     a + shift.clamp(min, max)
 }
 
+// ---------------------------------------------------------------- caption buttons
+
+/// A caption button picture placed in the top area: its picture scaled
+/// by `factor` to fit, its top at `top` px from the strip's top.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlacedButton {
+    pub factor: f32,
+    pub width: f32,
+    pub height: f32,
+    pub margin_left: f32,
+    pub margin_right: f32,
+    pub top: f32,
+}
+
 /// A caption button picture placed as Chrome's header bar places it in
 /// the 40-DIP top area (NavButtonProviderGtk::RedrawImages): the picture
 /// with its CSS margins and the bar's padding centred, all of it scaled
 /// down to fit when it would not.
 pub fn place_button(image: &ButtonImage, scale: f32) -> PlacedButton {
-    let top_area = VISIBLE;
     let needed = image.header_top
         + image.margin_top
         + image.height
         + image.margin_bottom
         + image.header_bottom;
-    let factor = if needed > top_area {
-        top_area / needed
+    let factor = if needed > TOP_AREA {
+        TOP_AREA / needed
     } else {
         1.
     };
-    let available = top_area - factor * (image.header_top + image.header_bottom);
+    let available = TOP_AREA - factor * (image.header_top + image.header_bottom);
     let button = factor * (image.height + image.margin_top + image.margin_bottom);
     let offset = factor * (image.header_top + image.margin_top) + (available - button) / 2.;
     PlacedButton {
@@ -271,10 +318,74 @@ pub fn place_button(image: &ButtonImage, scale: f32) -> PlacedButton {
     }
 }
 
+// ---------------------------------------------------------------- layout
+
+/// One tab laid out, in pixels from the strip's top-left.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tab {
+    /// The tab with its feet (Chrome's bounds), DIP.
+    pub bounds_dip: Rect,
+    /// The body between the feet, pixels, as `ScaleAndAlignBounds` aligns it.
+    pub body: Rect,
+    /// The active fill: the body with its feet, from the tab's top to the
+    /// strip's bottom (the toolbar's first row included).
+    pub shape: Rect,
+    /// The highlight (a hovered inactive tab's fill), and its corner
+    /// radius.
+    pub highlight: Rect,
+    pub radius: f32,
+    /// The favicon, when shown.
+    pub favicon: Option<Rect>,
+    /// The title's left edge and width, and its top so the baseline lies
+    /// where Chrome's label puts it.
+    pub title_left: f32,
+    pub title_width: f32,
+    pub title_top: f32,
+    /// The close button (28 square) when shown, and the icon within it.
+    pub close: Option<Rect>,
+    pub close_icon: Option<Rect>,
+    /// The separators either side of the tab (Chrome's leading and
+    /// trailing), shown by `separator_opacity`.
+    pub leading_separator: Rect,
+    pub trailing_separator: Rect,
+}
+
+/// The strip in pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Layout {
+    pub scale: f32,
+    /// The strip (41 DIP); the terminal begins at `height`, its first row
+    /// being the toolbar's under Chrome, where the top line is drawn.
+    pub height: f32,
+    pub top_line: f32,
+    /// A tab's row, below the strip's top.
+    pub tab_top: f32,
+    pub tab_height: f32,
+    pub tabs: Vec<Tab>,
+    pub title_baseline: f32,
+    /// The new-tab button (a 28 circle) and its icon.
+    pub new_tab: Rect,
+    pub new_tab_icon: Rect,
+    /// The caption buttons placed.
+    pub left_placed: Vec<PlacedButton>,
+    pub right_placed: Vec<PlacedButton>,
+}
+
+/// Chrome's `Center` for a tab's contents: the extra room halved, an odd
+/// pixel going to the leading side.
+fn center(size: f32, item: f32) -> f32 {
+    let mut extra = size - item;
+    if extra > 0. {
+        extra += 1.;
+    }
+    (extra / 2.).trunc()
+}
+
 impl Layout {
     pub fn compute(inputs: &Inputs) -> Layout {
         let scale = inputs.scale;
         let d = |v: f32| dip(v, scale);
+        let width = inputs.width_px / scale;
         let left_placed: Vec<PlacedButton> = inputs
             .left_buttons
             .iter()
@@ -285,141 +396,320 @@ impl Layout {
             .iter()
             .map(|b| place_button(b, scale))
             .collect();
-        let buttons_px: f32 = left_placed
-            .iter()
-            .chain(&right_placed)
-            .map(|b| b.width + b.margin_left + b.margin_right)
-            .sum::<f32>()
-            .max(d(inputs.drawn_buttons));
-        // the room for the bodies: less the buttons, the first body's lead
-        // and feet, the last body's feet and the new-tab button
-        let lead = match inputs.left_placed_last_margin(&left_placed) {
-            Some(margin) => d(LEADING).max(margin),
-            None => d(LEADING),
+        // the strip's region: from the client edge (or past the leading
+        // buttons by their margin over 12) to the trailing buttons less
+        // their margin
+        let extent = |b: &PlacedButton| (b.width + b.margin_left + b.margin_right) / scale;
+        let leading: f32 = left_placed.iter().map(extent).sum();
+        let leading_margin = left_placed.last().map_or(0., |b| b.margin_right / scale);
+        let region_left = if left_placed.is_empty() {
+            0.
+        } else {
+            leading - leading_margin + leading_margin.max(LEADING_MARGIN)
         };
-        let room =
-            inputs.width_px - buttons_px - lead - d(FOOT) - d(NEW_TAB_MARGIN) - d(BUTTON) - d(GAP);
-        let body_width = body_width(room.max(0.), inputs.tabs, scale);
-        let left_edge: f32 = left_placed
-            .iter()
-            .map(|b| b.width + b.margin_left + b.margin_right)
-            .sum();
-        let bodies = (0..inputs.tabs)
-            .map(|i| left_edge + lead + i as f32 * (body_width + d(GAP)))
-            .collect::<Vec<_>>();
+        // (the first trailing button's own left margin lies outside the
+        // buttons' bounds; the caption margin, its right margin, is added)
+        let trailing: f32 = right_placed
+            .first()
+            .map(|first| {
+                right_placed.iter().map(extent).sum::<f32>()
+                    - (first.margin_left - first.margin_right) / scale
+            })
+            .unwrap_or(0.)
+            .max(inputs.drawn_buttons);
+        let region_right = width - trailing;
+        // the tabs share the region less the new-tab button's room
+        let available = (region_right - region_left - NEW_TAB_ROOM).max(0.);
+        let widths = tab_widths(available, inputs.tabs, inputs.active);
         let tab_top = d(TAB_TOP);
         let tab_height = d(HIGHLIGHT_HEIGHT);
-        let favicon = inputs.favicons.then(|| {
-            Rect::new(
-                d(INSET),
-                tab_top + ((tab_height - d(FAVICON)) / 2.).round(),
-                d(FAVICON),
-                d(FAVICON),
-            )
-        });
-        let title_left = match favicon {
-            Some(f) => f.right() + d(FAVICON_GAP),
-            None => d(INSET),
-        };
-        let close = inputs.close_buttons.then(|| {
-            Rect::new(
-                body_width - d(INSET / 2.) - d(BUTTON),
-                tab_top,
-                d(BUTTON),
-                d(BUTTON),
-            )
-        });
-        let title_right = match close {
-            Some(c) => c.x,
-            None => body_width - d(INSET),
-        };
         let title_baseline = title_baseline(&inputs.font, scale);
         let title_top = (title_baseline - tab_top - inputs.font.baseline_in_cell)
             .round()
             .clamp(0., (tab_height - inputs.font.cell_height).max(0.));
-        let separator = Rect::new(
-            -(d(SEPARATOR.0) / 2.).round(),
-            tab_top + ((tab_height - d(SEPARATOR.1)) / 2.).round(),
-            d(SEPARATOR.0),
-            d(SEPARATOR.1),
-        );
-        let last_right = bodies.last().map_or(left_edge + lead, |x| x + body_width);
+        let mut x = region_left;
+        let mut tabs = Vec::with_capacity(widths.len());
+        for (i, &w) in widths.iter().enumerate() {
+            let active = i == inputs.active;
+            let bounds_dip = Rect::new(x, 0., w, STRIP_HEIGHT);
+            // the body's edges where Chrome aligns them to pixels
+            let body_left = ((x + FOOT) * scale).round();
+            let body_right = ((x + w - FOOT - 2.) * scale).round() + 2. * scale;
+            let body = Rect::new(body_left, tab_top, body_right - body_left, tab_height);
+            let radius = top_radius_for_width(w) * scale;
+            // what the tab shows (tab.cc UpdateIconVisibility)
+            let (favicon_shown, close_shown) = if w < TAB_MIN_INACTIVE {
+                (false, false)
+            } else {
+                let mut avail = w - 2. * CONTENT_INSET;
+                if active {
+                    let close = inputs.close_buttons;
+                    if close {
+                        avail -= CLOSE_ICON + AFTER_TITLE;
+                    }
+                    (inputs.favicons && avail >= FAVICON, close)
+                } else {
+                    let favicon = inputs.favicons && avail >= FAVICON;
+                    (favicon, inputs.close_buttons && avail >= CLOSE_ROOM)
+                }
+            };
+            let contents_left = x + CONTENT_INSET;
+            let contents_right = x + w - CONTENT_INSET;
+            let favicon = favicon_shown.then(|| {
+                Rect::new(
+                    d(contents_left),
+                    d(STRIP_HEIGHT - HIGHLIGHT_HEIGHT - 1.),
+                    d(FAVICON),
+                    d(FAVICON),
+                )
+            });
+            let (close, close_icon) = if close_shown {
+                let visible_left = (contents_right - CLOSE_ICON).max(x + center(w, CLOSE_ICON));
+                let pad = (CLOSE_BUTTON - CLOSE_ICON) / 2.;
+                (
+                    Some(Rect::new(
+                        d(visible_left - pad),
+                        tab_top,
+                        d(CLOSE_BUTTON),
+                        d(CLOSE_BUTTON),
+                    )),
+                    Some(Rect::new(
+                        d(visible_left),
+                        tab_top + d(pad),
+                        d(CLOSE_ICON),
+                        d(CLOSE_ICON),
+                    )),
+                )
+            } else {
+                (None, None)
+            };
+            let title_left = if favicon_shown {
+                contents_left + FAVICON + FAVICON_GAP
+            } else {
+                contents_left
+            };
+            let title_right = if close_shown {
+                contents_right - CLOSE_ICON - 2. * AFTER_TITLE
+            } else {
+                contents_right
+            };
+            let separator_y = tab_top + ((tab_height - d(SEPARATOR.1)) / 2.).trunc();
+            let separator = |sx: f32| Rect::new(d(sx), separator_y, d(SEPARATOR.0), d(SEPARATOR.1));
+            tabs.push(Tab {
+                bounds_dip,
+                body,
+                shape: Rect::new(
+                    body_left - d(FOOT),
+                    tab_top,
+                    body.w + 2. * d(FOOT),
+                    d(STRIP_HEIGHT) - tab_top,
+                ),
+                highlight: Rect::new(
+                    body_left,
+                    tab_top,
+                    body.w,
+                    (tab_top + HIGHLIGHT_HEIGHT * scale).trunc() - tab_top,
+                ),
+                radius,
+                favicon,
+                title_left: d(title_left),
+                title_width: (d(title_right) - d(title_left)).max(0.),
+                title_top,
+                close,
+                close_icon,
+                leading_separator: separator(x + SEPARATOR_FROM_EDGE),
+                trailing_separator: separator(x + w - SEPARATOR_FROM_EDGE - SEPARATOR.0),
+            });
+            x += w - TAB_OVERLAP;
+        }
+        let tabs_right = tabs.last().map_or(region_left, |t| t.bounds_dip.right());
         let new_tab = Rect::new(
-            last_right + d(GAP / 2.) + d(NEW_TAB_MARGIN),
+            d(tabs_right - FOOT + NEW_TAB_AFTER_TABS),
             tab_top,
-            d(BUTTON),
-            d(BUTTON),
+            d(NEW_TAB_BUTTON),
+            d(NEW_TAB_BUTTON),
         );
+        let icon_inset = d((NEW_TAB_BUTTON - NEW_TAB_ICON) / 2.);
         Layout {
             scale,
-            height: d(VISIBLE),
+            height: d(STRIP_HEIGHT),
+            top_line: d(STRIP_HEIGHT - OVERLAP),
             tab_top,
             tab_height,
-            tab_bottom_gap: d(VISIBLE) - tab_top - tab_height,
-            body_width,
-            lead,
-            bodies,
-            foot: d(FOOT),
-            top_radius: d(TOP_RADIUS),
-            highlight_radius: highlight_radius(body_width, scale),
-            favicon,
-            title_left,
-            title_width: (title_right - title_left).max(0.),
-            title_top,
+            tabs,
             title_baseline,
-            close,
-            separator,
+            new_tab_icon: Rect::new(
+                new_tab.x + icon_inset,
+                new_tab.y + icon_inset,
+                d(NEW_TAB_ICON),
+                d(NEW_TAB_ICON),
+            ),
             new_tab,
             left_placed,
             right_placed,
         }
     }
 
-    /// The highlight (a hovered inactive tab's fill) over the body at `x`.
-    pub fn highlight(&self, body_x: f32) -> Rect {
-        Rect::new(body_x, self.tab_top, self.body_width, self.tab_height)
-    }
-
-    /// The active tab's shape over the body at `x`: the body with its
-    /// feet, from the tab's top to the content.
-    pub fn shape(&self, body_x: f32) -> Rect {
-        Rect::new(
-            body_x - self.foot,
-            self.tab_top,
-            self.body_width + 2. * self.foot,
-            self.height - self.tab_top,
-        )
-    }
-
-    /// The separator between the bodies at `a` and `b` (a's left, b's left).
-    pub fn separator_between(&self, a: f32, b: f32) -> Rect {
-        let middle = ((a + self.body_width + b) / 2.).round();
-        Rect::new(
-            middle + self.separator.x,
-            self.separator.y,
-            self.separator.w,
-            self.separator.h,
-        )
+    /// Which tab the pointer at (`x`, `y`) is on: Chrome's hit test is the
+    /// tab's whole row below the strip's padding (to the top when the
+    /// frame is condensed), the body plus 3 DIP into each separator.
+    pub fn tab_at(&self, x: f32, y: f32, condensed: bool) -> Option<usize> {
+        let top = if condensed { 0. } else { self.tab_top };
+        if y < top || y >= self.height {
+            return None;
+        }
+        let reach = dip(3., self.scale);
+        self.tabs
+            .iter()
+            .position(|t| x >= t.body.x - reach && x < t.body.right() + reach)
     }
 }
 
-impl Inputs {
-    /// The last caption button's margin on the left, when there are any.
-    fn left_placed_last_margin(&self, placed: &[PlacedButton]) -> Option<f32> {
-        placed.last().map(|b| b.margin_right)
+/// How much of the separator between tabs `a` and `b` (`b` right after
+/// `a`) shows: none beside a tab that is active, else 1 less the larger
+/// of the two hovers, so it fades with a neighbour's hover
+/// (GetSeparatorOpacity).
+pub fn separator_opacity(a_active: bool, a_hover: f32, b_active: bool, b_hover: f32) -> f32 {
+    if a_active || b_active {
+        return 0.;
+    }
+    (1. - a_hover.max(b_hover)).clamp(0., 1.)
+}
+
+// ---------------------------------------------------------------- hover card
+
+/// Chrome's tab hover card (tab_hover_card_bubble_view.cc): as wide as a
+/// standard tab, its corners 8, its text inset 12 (the title 4 above the
+/// second line), a 256 x 144 preview below; it comes 300 ms after the
+/// pointer rests on a narrow tab, 800 on a standard one and 500 more on
+/// top of that, fades in over 200 ms and out over 150.
+pub const HOVER_CARD_WIDTH: f32 = 256.;
+pub const HOVER_CARD_RADIUS: f32 = 8.;
+pub const HOVER_CARD_MARGIN: f32 = 12.;
+pub const HOVER_CARD_LINE_GAP: f32 = 4.;
+pub const HOVER_CARD_PREVIEW: (f32, f32) = (256., 144.);
+pub const HOVER_CARD_FADE_IN_MS: f32 = 200.;
+pub const HOVER_CARD_FADE_OUT_MS: f32 = 150.;
+/// The card's shadow: two layers, both 2 DIP down, blurred 8 and 12
+/// (Skia's blur, twice the CSS blur), at 20% and 10% of black.
+pub const HOVER_CARD_SHADOWS: [(f32, f32, f32); 2] = [(2., 8., 0.20), (2., 12., 0.10)];
+const HOVER_CARD_DELAY_MIN_MS: f32 = 300.;
+const HOVER_CARD_DELAY_MAX_MS: f32 = 800.;
+const HOVER_CARD_DELAY_EXTRA_MS: f32 = 500.;
+const HOVER_CARD_NARROW_TAB: f32 = 64.;
+
+/// How long the pointer rests before the card shows, by the widest tab
+/// in the strip (DIP, with its feet): 300 ms up to a pinned tab's 64,
+/// rising to 800 at the standard 256, where 500 ms more are added.
+pub fn hover_card_delay_ms(widest_tab: f32) -> f32 {
+    if widest_tab <= HOVER_CARD_NARROW_TAB {
+        return HOVER_CARD_DELAY_MIN_MS;
+    }
+    let t = ((widest_tab - HOVER_CARD_NARROW_TAB) / (TAB_STANDARD - HOVER_CARD_NARROW_TAB))
+        .clamp(0., 1.);
+    let delay = HOVER_CARD_DELAY_MIN_MS + (HOVER_CARD_DELAY_MAX_MS - HOVER_CARD_DELAY_MIN_MS) * t;
+    if widest_tab >= TAB_STANDARD {
+        delay + HOVER_CARD_DELAY_EXTRA_MS
+    } else {
+        delay
+    }
+}
+
+// ---------------------------------------------------------------- animation
+
+/// Chrome's hover animation: 200 ms, eased out coming in (1 - (1 - t)^2),
+/// eased in going out (t^2); reversed midway it goes on from where it is.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hover {
+    from: f32,
+    to: f32,
+    start_ms: f64,
+}
+
+impl Hover {
+    pub fn at(value: f32) -> Hover {
+        Hover {
+            from: value,
+            to: value,
+            start_ms: 0.,
+        }
+    }
+
+    /// The value at `now_ms`.
+    pub fn value(&self, now_ms: f64) -> f32 {
+        if self.from == self.to {
+            return self.to;
+        }
+        let t = ((now_ms - self.start_ms) / f64::from(HOVER_ANIMATION_MS)).clamp(0., 1.) as f32;
+        let eased = if self.to > self.from {
+            1. - (1. - t) * (1. - t)
+        } else {
+            t * t
+        };
+        self.from + (self.to - self.from) * eased
+    }
+
+    pub fn done(&self, now_ms: f64) -> bool {
+        self.from == self.to || now_ms - self.start_ms >= f64::from(HOVER_ANIMATION_MS)
+    }
+
+    /// Start towards `target` (1 hovered, 0 not) at `now_ms`, from
+    /// wherever the animation is.
+    pub fn towards(&self, target: f32, now_ms: f64) -> Hover {
+        if self.to == target {
+            return *self;
+        }
+        Hover {
+            from: self.value(now_ms),
+            to: target,
+            start_ms: now_ms,
+        }
     }
 }
 
 // ---------------------------------------------------------------- colours
 
-/// The contrast below which the active tab gets its stroke, and the
-/// contrast the stroke keeps from it (BrowserView::ShouldDrawTabStrokes,
-/// kColorToolbarTopSeparator).
+/// The contrast below which the active tab gets its stroke
+/// (BrowserView::ShouldDrawTabStrokes), and the contrast the stroke keeps
+/// from it (kColorToolbarTopSeparator).
 pub const STROKE_BELOW: f32 = 1.3;
 pub const STROKE_CONTRAST: f32 = 2.0;
-/// An inactive tab under the pointer without a theme's own colour: this
-/// much of the active colour over the strip (tab_strip_color_mixer.cc).
-pub const HOVER_BLEND: f32 = 0.4;
+/// color_utils: the luminance a colour is dark below, Google Grey 900,
+/// white.
+pub const DARK_BELOW: f32 = 0.211_692_04;
+pub const GREY_900: SrgbaTuple = SrgbaTuple(
+    0x20 as f32 / 255.,
+    0x21 as f32 / 255.,
+    0x24 as f32 / 255.,
+    1.,
+);
+pub const WHITE: SrgbaTuple = SrgbaTuple(1., 1., 1., 1.);
+/// Chrome's baseline palette, where the desktop has no accent: the hover
+/// fill in light (primary 80) and dark (secondary 30).
+pub const HOVER_LIGHT: SrgbaTuple = SrgbaTuple(
+    0xA8 as f32 / 255.,
+    0xC7 as f32 / 255.,
+    0xFA as f32 / 255.,
+    1.,
+);
+pub const HOVER_DARK: SrgbaTuple = SrgbaTuple(0., 0x4A as f32 / 255., 0x77 as f32 / 255., 1.);
+/// Neutral 10 and 99: the hover over an unfocused window's tab is one of
+/// them, translucent (kColorSysStateHoverOnSubtle: 0x0F of neutral 10 in
+/// light, 0x1A of neutral 99 in dark).
+pub const NEUTRAL_10: SrgbaTuple = SrgbaTuple(
+    0x1F as f32 / 255.,
+    0x1F as f32 / 255.,
+    0x1F as f32 / 255.,
+    1.,
+);
+pub const NEUTRAL_99: SrgbaTuple = SrgbaTuple(
+    0xFD as f32 / 255.,
+    0xFC as f32 / 255.,
+    0xFB as f32 / 255.,
+    1.,
+);
+pub const HOVER_UNFOCUSED_LIGHT_ALPHA: f32 = 0x0F as f32 / 255.;
+pub const HOVER_UNFOCUSED_DARK_ALPHA: f32 = 0x1A as f32 / 255.;
 
 fn linear(c: f32) -> f32 {
     if c <= 0.04045 {
@@ -434,13 +724,28 @@ pub fn luminance(c: SrgbaTuple) -> f32 {
     0.2126 * linear(c.0) + 0.7152 * linear(c.1) + 0.0722 * linear(c.2)
 }
 
+/// color_utils::IsDark.
+pub fn is_dark(c: SrgbaTuple) -> bool {
+    luminance(c) < DARK_BELOW
+}
+
+/// color_utils::GetColorWithMaxContrast: white on a dark colour, Google
+/// Grey 900 on a light one.
+pub fn max_contrast(c: SrgbaTuple) -> SrgbaTuple {
+    if is_dark(c) {
+        WHITE
+    } else {
+        GREY_900
+    }
+}
+
 /// WCAG's contrast ratio (color_utils::GetContrastRatio).
 pub fn contrast(a: SrgbaTuple, b: SrgbaTuple) -> f32 {
     let (la, lb) = (luminance(a), luminance(b));
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
-/// `a` over `b` at `alpha` in sRGB (color_utils::AlphaBlend).
+/// `a` over `b` at `alpha` in sRGB (color_utils::AlphaBlend), opaque.
 pub fn blend(a: SrgbaTuple, b: SrgbaTuple, alpha: f32) -> SrgbaTuple {
     let m = |x: f32, y: f32| x * alpha + y * (1. - alpha);
     SrgbaTuple(m(a.0, b.0), m(a.1, b.1), m(a.2, b.2), 1.)
@@ -473,18 +778,9 @@ pub fn min_contrast(
     Some(blend(target, fg, hi))
 }
 
-/// Google Grey 900 and white, the stroke's targets.
-pub const GREY_900: SrgbaTuple = SrgbaTuple(
-    0x20 as f32 / 255.,
-    0x21 as f32 / 255.,
-    0x24 as f32 / 255.,
-    1.,
-);
-pub const WHITE: SrgbaTuple = SrgbaTuple(1., 1., 1., 1.);
-
-/// The active tab's stroke where it would not stand out from the strip:
-/// its colour taken towards Grey 900 until it contrasts 2:1 with itself,
-/// else towards white.
+/// The active tab's stroke, and the toolbar's top line, where the tab
+/// would not stand out from the strip: the tab's colour taken towards
+/// Grey 900 until it contrasts 2:1 with itself, else towards white.
 pub fn stroke(active: SrgbaTuple, frame: SrgbaTuple) -> Option<SrgbaTuple> {
     if contrast(active, frame) >= STROKE_BELOW {
         return None;
@@ -493,9 +789,26 @@ pub fn stroke(active: SrgbaTuple, frame: SrgbaTuple) -> Option<SrgbaTuple> {
         .or_else(|| min_contrast(active, active, WHITE, STROKE_CONTRAST))
 }
 
-/// An inactive tab under the pointer without a theme's own colour.
-pub fn hover(active: SrgbaTuple, frame: SrgbaTuple) -> SrgbaTuple {
-    blend(active, frame, HOVER_BLEND)
+/// The fill of an inactive tab under the pointer, fully hovered: in a
+/// focused window the theme's own (the desktop accent's tone, which the
+/// configuration gives) or Chrome's baseline for the strip's darkness;
+/// in an unfocused window a translucent neutral over the strip.
+pub fn hover_fill(theme: Option<SrgbaTuple>, frame: SrgbaTuple, focused: bool) -> SrgbaTuple {
+    let dark = is_dark(frame);
+    if focused {
+        theme.unwrap_or(if dark { HOVER_DARK } else { HOVER_LIGHT })
+    } else if dark {
+        blend(NEUTRAL_99, frame, HOVER_UNFOCUSED_DARK_ALPHA)
+    } else {
+        blend(NEUTRAL_10, frame, HOVER_UNFOCUSED_LIGHT_ALPHA)
+    }
+}
+
+/// The colour an inactive tab shows as its hover comes and goes
+/// (PaintBackgroundHover): the hover fill over the strip by the
+/// animation's value.
+pub fn hover_at(fill: SrgbaTuple, frame: SrgbaTuple, value: f32) -> SrgbaTuple {
+    blend(fill, frame, value)
 }
 
 #[cfg(test)]
@@ -515,54 +828,72 @@ mod tests {
     }
 
     #[test]
-    fn the_strips_rows_at_scale_1() {
+    fn a_strip_of_four_at_scale_1() {
         let l = Layout::compute(&Inputs {
             tabs: 4,
-            width_px: 1100.,
+            active: 1,
+            width_px: 1200.,
             ..Inputs::default()
         });
-        assert_eq!(l.height, 40., "40 of the 41 show; the content at row 40");
         assert_eq!(
-            (l.tab_top, l.tab_height, l.tab_bottom_gap),
-            (6., 28., 6.),
-            "the pill 6..34, centred"
+            (l.height, l.top_line),
+            (41., 40.),
+            "41 DIP, the toolbar's line on the last"
         );
-        assert_eq!(l.body_width, 232., "room to spare: the standard width");
-        assert_eq!(l.lead, 12., "the first body 12 from the client edge");
-        assert_eq!(l.bodies, vec![12., 250., 488., 726.], "bodies 6 apart");
+        assert_eq!((l.tab_top, l.tab_height), (6., 28.));
+        let t = &l.tabs[0];
         assert_eq!(
-            l.favicon,
-            Some(Rect::new(8., 12., 16., 16.)),
-            "favicon rows 12..28, 8 in"
-        );
-        assert_eq!(l.title_left, 32., "the title 8 after the favicon");
-        assert_eq!(
-            l.close,
-            Some(Rect::new(200., 6., 28., 28.)),
-            "the close circle 4 from the right, rows 6..34"
-        );
-        assert_eq!(l.title_width, 168.);
-        assert_eq!(
-            l.separator,
-            Rect::new(-1., 12., 2., 16.),
-            "separators rows 12..28"
+            t.bounds_dip,
+            Rect::new(0., 0., 256., 41.),
+            "Chrome's standard tab at the client edge"
         );
         assert_eq!(
-            l.separator_between(12., 250.),
-            Rect::new(246., 12., 2., 16.)
+            t.body,
+            Rect::new(12., 6., 232., 28.),
+            "the body 12 in, between the feet"
         );
+        assert_eq!(
+            t.shape,
+            Rect::new(0., 6., 256., 35.),
+            "the fill with its feet, down to the content"
+        );
+        assert_eq!(
+            t.highlight,
+            Rect::new(12., 6., 232., 28.),
+            "the pill rows 6..34"
+        );
+        assert_eq!(t.radius, 10.);
+        assert_eq!(
+            t.favicon,
+            Some(Rect::new(20., 12., 16., 16.)),
+            "favicon at the contents' corner, rows 12..28"
+        );
+        assert_eq!(
+            (t.title_left, t.title_width),
+            (44., 168.),
+            "8 after the favicon, 8 before the close icon"
+        );
+        assert_eq!(
+            t.close,
+            Some(Rect::new(214., 6., 28., 28.)),
+            "the close button, its icon 16 from the contents' right"
+        );
+        assert_eq!(t.close_icon, Some(Rect::new(220., 12., 16., 16.)));
+        assert_eq!(t.leading_separator, Rect::new(8., 12., 2., 16.));
+        assert_eq!(t.trailing_separator, Rect::new(246., 12., 2., 16.));
+        assert_eq!(l.tabs[1].bounds_dip.x, 238., "tabs overlap by 18");
+        assert_eq!(l.tabs[1].body.x, 250., "bodies 6 apart");
+        assert_eq!(
+            l.tabs[1].leading_separator, l.tabs[0].trailing_separator,
+            "one separator between two tabs"
+        );
+        assert_eq!(l.tabs[3].bounds_dip.right(), 3. * 238. + 256.);
         assert_eq!(
             l.new_tab,
-            Rect::new(963., 6., 28., 28.),
-            "the new-tab button on the tab row"
+            Rect::new(3. * 238. + 256. - 6., 6., 28., 28.),
+            "the new-tab button 6 past the last tab"
         );
-        assert_eq!(l.highlight(250.), Rect::new(250., 6., 232., 28.));
-        assert_eq!(
-            l.shape(250.),
-            Rect::new(238., 6., 256., 34.),
-            "the feet either side, down to the content"
-        );
-        assert_eq!((l.top_radius, l.foot, l.highlight_radius), (10., 12., 10.));
+        assert_eq!(l.new_tab_icon, Rect::new(l.new_tab.x + 6., 12., 16., 16.));
     }
 
     #[test]
@@ -571,8 +902,8 @@ mod tests {
         // Noto Sans CJK SC 15 px: ascent 18, cap 11 -> baseline row 26
         assert_eq!(l.title_baseline, 26.);
         assert_eq!(
-            l.title_top, 3.,
-            "the 22-px cell 3 below the tab row: baseline 6 + 3 + 17"
+            l.tabs[0].title_top, 3.,
+            "the 22-px cell 3 below the tab row: 6 + 3 + 17 = 26"
         );
         assert_eq!(
             title_baseline(
@@ -598,7 +929,6 @@ mod tests {
             35.,
             "a shift of 5 - 10, within the -9..9 the tab allows"
         );
-        // a tall font's cell cannot leave the tab row
         let tall = Layout::compute(&Inputs {
             font: FontMetrics {
                 ascent: 24.,
@@ -609,18 +939,22 @@ mod tests {
             },
             ..Inputs::default()
         });
-        assert_eq!(tall.title_top, 0.);
+        assert_eq!(
+            tall.tabs[0].title_top, 0.,
+            "a tall cell cannot leave the tab row"
+        );
     }
 
     #[test]
     fn scales() {
         for (scale, height, top, pill, favicon, close) in [
-            (1.25, 50., 8., 35., Rect::new(10., 16., 20., 20.), 35.),
-            (1.5, 60., 9., 42., Rect::new(12., 18., 24., 24.), 42.),
-            (2., 80., 12., 56., Rect::new(16., 24., 32., 32.), 56.),
+            (1.25, 51., 8., 35., Rect::new(25., 15., 20., 20.), 35.),
+            (1.5, 62., 9., 42., Rect::new(30., 18., 24., 24.), 42.),
+            (2., 82., 12., 56., Rect::new(40., 24., 32., 32.), 56.),
         ] {
             let l = Layout::compute(&Inputs {
                 scale,
+                width_px: 1100. * scale,
                 ..Inputs::default()
             });
             assert_eq!(
@@ -628,49 +962,98 @@ mod tests {
                 (height, top, pill),
                 "at {scale}"
             );
-            assert_eq!(l.favicon, Some(favicon), "at {scale}");
-            assert_eq!(l.close.unwrap().w, close, "the button round(28 * {scale})");
-            assert_eq!(l.body_width, dip(BODY_MAX, scale));
+            assert_eq!(l.tabs[0].favicon, Some(favicon), "at {scale}");
+            assert_eq!(
+                l.tabs[0].close.unwrap().w,
+                close,
+                "the button round(28 * {scale})"
+            );
+            let t = &l.tabs[0];
+            assert_eq!(
+                (t.body.x, t.body.right()),
+                ((12. * scale).round(), (242. * scale).round() + 2. * scale),
+                "the body's edges as ScaleAndAlignBounds aligns them, at {scale}"
+            );
+            assert_eq!(
+                l.tabs[0].highlight.h,
+                (top + 28. * scale).trunc() - top,
+                "int(top + 28s) as Chrome"
+            );
         }
     }
 
     #[test]
-    fn widths_shared_out() {
-        let l = Layout::compute(&Inputs {
-            tabs: 10,
-            width_px: 800.,
-            ..Inputs::default()
-        });
-        // 800 - 12 - 12 - 2 - 28 - 6 = 740 for 10: 74 - 6 = 68 each
-        assert_eq!(l.body_width, 68.);
-        assert_eq!(l.bodies[9], 12. + 9. * 74.);
+    fn widths_as_chrome_shares_them() {
+        // room to spare: every tab standard
+        assert_eq!(tab_widths(1000., 3, 0), vec![256., 256., 256.]);
+        // between the crossing point and the standard: all the same, the
+        // DIP left over to the first tabs
+        let w = tab_widths(400., 4, 0);
+        // cross_w = 4*38+18 = 170, pref_w = 4*238+18 = 970; f = 230/800
+        assert_eq!(w, vec![114., 114., 113., 113.]);
         assert_eq!(
-            l.highlight_radius, 10.,
-            "a third of a 92-wide top is over 10 still"
+            w.iter().map(|w| w - 18.).sum::<f32>() + 18.,
+            400.,
+            "they fill the room exactly"
         );
+        // below it: the active tab keeps 56, the others shrink towards 32
+        let w = tab_widths(100., 3, 1);
+        // min_w = 14+38+14+18 = 84, cross_w = 3*38+18 = 132; f = 16/48
+        assert_eq!(w[1], 56.);
+        assert!(w[0] < 56. && w[0] >= 32., "{:?}", w);
+        assert_eq!(w[0], w[2]);
+        // nothing narrower than the least
+        let w = tab_widths(10., 3, 0);
+        assert_eq!(w, vec![56., 32., 32.]);
+        assert_eq!(tab_widths(500., 0, 0), Vec::<f32>::new());
+    }
+
+    #[test]
+    fn narrow_tabs_lose_their_close_buttons_and_corners() {
+        // 40 tabs in 600 px: inactive tabs at 32, the active at 56
         let l = Layout::compute(&Inputs {
             tabs: 40,
-            width_px: 800.,
+            width_px: 600.,
+            active: 3,
             ..Inputs::default()
         });
-        assert_eq!(l.body_width, 32., "never narrower than the minimum");
-        assert_eq!(
-            l.highlight_radius, 10.,
-            "Chrome's narrowest tab keeps its radius"
+        assert_eq!(l.tabs[0].bounds_dip.w, 32.);
+        assert_eq!(l.tabs[3].bounds_dip.w, 56.);
+        assert!(
+            l.tabs[0].close.is_none(),
+            "an inactive tab needs 68 of room for its close button"
         );
-        assert_eq!(
-            highlight_radius(10., 1.),
-            14. / 3.,
-            "only under 50 wide do the corners shrink"
+        assert!(
+            l.tabs[3].close.is_some(),
+            "the active tab keeps its close button"
         );
+        assert_eq!(l.tabs[0].favicon, None, "32 wide: nothing but the tab");
+        assert_eq!(
+            top_radius_for_width(32.),
+            4.,
+            "a third of the 12 left of the top"
+        );
+        assert_eq!(top_radius_for_width(50.), 10.);
+        assert_eq!(top_radius_for_width(256.), 10.);
+        // an inactive tab of 108 gets its close button back, 107 not
+        let strip_for = |w: f32| Inputs {
+            tabs: 8,
+            width_px: w * 8. - 7. * 18. + 34.,
+            active: 0,
+            ..Inputs::default()
+        };
+        let l = Layout::compute(&strip_for(108.));
+        assert_eq!(l.tabs[1].bounds_dip.w, 108.);
+        assert!(l.tabs[1].close.is_some());
+        let l = Layout::compute(&strip_for(107.));
+        assert_eq!(l.tabs[1].bounds_dip.w, 107.);
+        assert!(l.tabs[1].close.is_none());
     }
 
     #[test]
     fn caption_buttons_placed_as_the_header_bar_places_them() {
-        // Lingmo's 36-px pictures with no margins: centred in the 40
         let p = place_button(&lingmo_button(), 1.);
         assert_eq!((p.factor, p.width, p.height, p.top), (1., 36., 36., 2.));
-        // a 44-px picture with 2 of header padding each side: shrunk to fit
         let big = ButtonImage {
             width: 44.,
             height: 44.,
@@ -682,7 +1065,6 @@ mod tests {
         assert!((p.factor - 40. / 48.).abs() < 1e-6);
         assert_eq!((p.width, p.height), (37., 37.));
         assert_eq!(p.top, 2., "2 of padding scaled, then centred");
-        // margins and padding go into the centring
         let m = ButtonImage {
             width: 24.,
             height: 24.,
@@ -691,18 +1073,17 @@ mod tests {
             header_bottom: 6.,
             ..ButtonImage::default()
         };
-        let p = place_button(&m, 1.);
         assert_eq!(
-            p.top, 10.,
+            place_button(&m, 1.).top,
+            10.,
             "6 of padding, 4 of margin, the 28 centred in 28"
         );
-        // at 2x, whole pixels
         let p = place_button(&lingmo_button(), 2.);
         assert_eq!((p.width, p.top), (72., 4.));
     }
 
     #[test]
-    fn the_first_tab_past_left_buttons() {
+    fn the_strip_past_caption_buttons() {
         let close = ButtonImage {
             width: 24.,
             height: 24.,
@@ -710,12 +1091,13 @@ mod tests {
             margin_right: 8.,
             ..ButtonImage::default()
         };
+        // leading: the strip starts past the button by the larger of 12 and its margin
         let l = Layout::compute(&Inputs {
             left_buttons: vec![close],
             ..Inputs::default()
         });
-        assert_eq!(l.lead, 12., "the larger of 12 and the button's margin");
-        assert_eq!(l.bodies[0], 38. + 12.);
+        assert_eq!(l.tabs[0].bounds_dip.x, 30. + 12., "6 + 24 + max(12, 8)");
+        assert_eq!(l.tabs[0].body.x, 54.);
         let wide = ButtonImage {
             margin_right: 20.,
             ..close
@@ -724,13 +1106,99 @@ mod tests {
             left_buttons: vec![wide],
             ..Inputs::default()
         });
-        assert_eq!(l.lead, 20.);
+        assert_eq!(l.tabs[0].bounds_dip.x, 30. + 20.);
+        // trailing: the tabs share what is left before the buttons and the new-tab button
+        let l = Layout::compute(&Inputs {
+            tabs: 5,
+            width_px: 1000.,
+            right_buttons: vec![close; 3],
+            ..Inputs::default()
+        });
+        // three 24-wide buttons with 6 + 8 of margin: their bounds run from
+        // 1000 - (3 * 38 - 6) = 892, less the 8 caption margin
+        let trailing = 3. * 38. - 6. + 8.;
+        eprintln!(
+            "{:?}",
+            l.tabs.iter().map(|t| t.bounds_dip).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            l.tabs[4].bounds_dip.right() + 34.,
+            1000. - trailing,
+            "the new-tab button's 34 kept"
+        );
+        assert_eq!(
+            l.new_tab.right(),
+            1000. - trailing - 12.,
+            "6 past the last tab, 12 short of the buttons' region"
+        );
+    }
+
+    #[test]
+    fn hit_testing_a_tab() {
+        let l = Layout::compute(&Inputs {
+            tabs: 2,
+            ..Inputs::default()
+        });
+        assert_eq!(l.tab_at(100., 20., false), Some(0));
+        assert_eq!(l.tab_at(100., 3., false), None, "above the tabs' padding");
+        assert_eq!(
+            l.tab_at(100., 3., true),
+            Some(0),
+            "a maximized window's tabs reach the top"
+        );
+        assert_eq!(l.tab_at(246., 20., false), Some(0), "3 into the separator");
+        assert_eq!(l.tab_at(247., 20., false), Some(1));
+        assert_eq!(l.tab_at(100., 41., false), None);
+    }
+
+    #[test]
+    fn separators_beside_active_and_hovered_tabs() {
+        assert_eq!(separator_opacity(false, 0., false, 0.), 1.);
+        assert_eq!(separator_opacity(true, 0., false, 0.), 0.);
+        assert_eq!(
+            separator_opacity(false, 0., false, 0.25),
+            0.75,
+            "fading with the neighbour's hover"
+        );
+    }
+
+    #[test]
+    fn the_hover_cards_delay() {
+        assert_eq!(hover_card_delay_ms(40.), 300.);
+        assert_eq!(hover_card_delay_ms(64.), 300.);
+        assert_eq!(hover_card_delay_ms(160.), 550.);
+        assert_eq!(
+            hover_card_delay_ms(256.),
+            1300.,
+            "800 and the 500 more at the standard width"
+        );
+        assert_eq!(hover_card_delay_ms(300.), 1300.);
+    }
+
+    #[test]
+    fn the_hover_animation() {
+        let h = Hover::at(0.).towards(1., 1000.);
+        assert_eq!(h.value(1000.), 0.);
+        assert!((h.value(1100.) - 0.75).abs() < 1e-6, "eased out: 1 - 0.5^2");
+        assert_eq!(h.value(1200.), 1.);
+        assert!(h.done(1200.));
+        // reversed midway: from where it is, eased in
+        let back = h.towards(0., 1100.);
+        assert!((back.value(1100.) - 0.75).abs() < 1e-6);
+        assert!(
+            (back.value(1200.) - 0.75 * 0.75).abs() < 1e-6,
+            "0.75 * (1 - 0.5^2)"
+        );
+        assert_eq!(back.value(1400.), 0.);
     }
 
     #[test]
     fn contrast_as_wcag() {
         assert!((contrast(rgb(0, 0, 0), rgb(255, 255, 255)) - 21.).abs() < 0.01);
         assert!((contrast(rgb(10, 10, 10), rgb(10, 10, 10)) - 1.).abs() < 0.001);
+        assert!(is_dark(GREY_900) && !is_dark(rgb(0x80, 0x80, 0x80)));
+        assert_eq!(max_contrast(rgb(0xfa, 0xfa, 0xfa)), GREY_900);
+        assert_eq!(max_contrast(rgb(0x20, 0x20, 0x20)), WHITE);
     }
 
     #[test]
@@ -744,8 +1212,25 @@ mod tests {
     }
 
     #[test]
-    fn hover_without_a_theme_colour() {
-        let h = hover(rgb(255, 255, 255), rgb(0, 0, 0));
+    fn hover_fills() {
+        let light = rgb(0xfa, 0xfa, 0xfa);
+        assert_eq!(
+            hover_fill(None, light, true),
+            HOVER_LIGHT,
+            "Chrome's baseline in light"
+        );
+        assert_eq!(hover_fill(None, rgb(0x20, 0x20, 0x20), true), HOVER_DARK);
+        assert_eq!(
+            hover_fill(Some(rgb(1, 2, 3)), light, true),
+            rgb(1, 2, 3),
+            "the theme's own when given"
+        );
+        let unfocused = hover_fill(Some(rgb(1, 2, 3)), light, false);
+        assert!(
+            unfocused.0 < light.0 && unfocused.0 > 0.9,
+            "a faint neutral over the strip: {unfocused:?}"
+        );
+        let h = hover_at(rgb(255, 255, 255), rgb(0, 0, 0), 0.4);
         assert!((h.0 - 0.4).abs() < 1e-6);
     }
 }

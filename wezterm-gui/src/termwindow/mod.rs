@@ -403,6 +403,8 @@ pub struct TermWindow {
     fancy_tab_bar: Option<box_model::ComputedElement>,
     /// The tab the pointer rests on, and its card (see `hover_card`)
     tab_hover_card: Option<render::hover_card::TabHoverCard>,
+    /// The Chrome strip's hover animations.
+    chrome_hover: RefCell<render::fancy_tab_bar::ChromeHover>,
     pub right_status: String,
     pub left_status: String,
     last_ui_item: Option<UIItem>,
@@ -736,6 +738,7 @@ impl TermWindow {
             tab_bar: TabBarState::default(),
             fancy_tab_bar: None,
             tab_hover_card: None,
+            chrome_hover: RefCell::new(render::fancy_tab_bar::ChromeHover::default()),
             right_status: String::new(),
             left_status: String::new(),
             last_mouse_coords: (0, -1),

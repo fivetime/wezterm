@@ -112,10 +112,10 @@ impl crate::TermWindow {
         render_metrics: &RenderMetrics,
     ) -> anyhow::Result<f32> {
         if config.use_fancy_tab_bar && config.tab_strip_style == config::TabStripStyle::Chrome {
-            // the strip's last DIP is under Chrome's toolbar: here the
-            // terminal begins there
+            // Chrome's 41 DIP; the terminal begins below, the toolbar's
+            // top line on the last row
             let scale = fontconfig.get_dpi() as f32 / 96.;
-            return Ok(chrome_strip::dip(chrome_strip::VISIBLE, scale));
+            return Ok(chrome_strip::dip(chrome_strip::STRIP_HEIGHT, scale));
         }
         if config.use_fancy_tab_bar {
             let font = fontconfig.title_font()?;

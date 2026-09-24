@@ -64,13 +64,55 @@ impl Edge {
             return Insets::default();
         }
         let c = &self.config;
-        let px = |v: f64| (v.max(c.input) * scale).round().clamp(0., 255.) as u16;
+        // Chrome ceils its frame extents to pixels
+        let px = |v: f64| (v.max(c.input) * scale).ceil().clamp(0., 255.) as u16;
         Insets {
             left: px(c.left),
             right: px(c.right),
             top: px(c.top),
             bottom: px(c.bottom),
         }
+    }
+
+    /// A tiled window's insets: the resize band alone on every side.
+    pub fn band_insets(&self, scale: f64) -> Insets {
+        let band = self.band(scale);
+        Insets {
+            left: band,
+            right: band,
+            top: band,
+            bottom: band,
+        }
+    }
+
+    /// The margins cleared (a tiled window: no shadow), as `paint` gives
+    /// them.
+    pub fn clear(outer: (u16, u16), insets: Insets) -> Vec<(u16, u16, u16, u16, Vec<u8>)> {
+        let (w, h) = outer;
+        let rect = |x: u16, y: u16, rw: u16, rh: u16| {
+            (
+                x,
+                y,
+                rw,
+                rh,
+                vec![0u8; usize::from(rw) * usize::from(rh) * 4],
+            )
+        };
+        let mut out = vec![];
+        if insets.top > 0 {
+            out.push(rect(0, 0, w, insets.top.min(h)));
+        }
+        if insets.bottom > 0 && h > insets.bottom {
+            out.push(rect(0, h - insets.bottom, w, insets.bottom));
+        }
+        let middle = h.saturating_sub(insets.top + insets.bottom);
+        if insets.left > 0 && middle > 0 {
+            out.push(rect(0, insets.top, insets.left.min(w), middle));
+        }
+        if insets.right > 0 && middle > 0 && w > insets.right {
+            out.push(rect(w - insets.right, insets.top, insets.right, middle));
+        }
+        out
     }
 
     /// The top corners' radius in pixels at `scale`.

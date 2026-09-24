@@ -126,6 +126,10 @@ bitflags! {
         /// corners; see `integrated_window_edge`): the content's top
         /// corners are to be left clear, for the round ones beneath
         const CLIENT_EDGE = 1<<6;
+        /// Maximized along one axis only (an X11 window tiled to a screen
+        /// edge): Chrome keeps only the resize band of its frame then, no
+        /// shadow and no round corners.
+        const TILED = 1<<7;
     }
 }
 
