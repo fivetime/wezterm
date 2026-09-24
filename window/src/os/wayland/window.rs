@@ -480,6 +480,15 @@ impl WindowOps for WaylandWindow {
         });
     }
 
+    /// A drag on the tab bar moves the window: the compositor does it,
+    /// from the press that started it, as a GTK header bar asks
+    fn request_drag_move(&self) {
+        WaylandConnection::with_window_inner(self.0, move |inner| {
+            inner.request_drag_move();
+            Ok(())
+        });
+    }
+
     fn set_resize_increments(&self, incr: ResizeIncrement) {
         WaylandConnection::with_window_inner(self.0, move |inner| {
             inner.set_resize_increments(incr)
@@ -1242,6 +1251,21 @@ impl WaylandWindowInner {
     fn set_resize_increments(&mut self, incr: ResizeIncrement) -> anyhow::Result<()> {
         self.resize_increments.replace(incr);
         Ok(())
+    }
+
+    /// `xdg_toplevel.move` with the last pointer press's serial (the one
+    /// the GUI is handling when it asks).
+    fn request_drag_move(&mut self) {
+        let conn = WaylandConnection::get().unwrap().wayland();
+        let (pointer, serial) = {
+            let state = conn.wayland_state.borrow();
+            let serial = *state.last_serial.borrow();
+            match state.pointer.as_ref() {
+                Some(pointer) => (pointer.pointer().clone(), serial),
+                None => return,
+            }
+        };
+        self.frame_action(&pointer, serial, FrameAction::Move);
     }
 
     fn set_inner_size(&mut self, width: usize, height: usize) {
