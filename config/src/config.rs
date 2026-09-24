@@ -517,6 +517,12 @@ pub struct Config {
     #[dynamic(default = "default_true")]
     pub use_fancy_tab_bar: bool,
 
+    /// How the fancy tab bar draws its tabs: WezTerm's own, or Chrome's
+    /// (its heights, tab shape, separators and colour rules; see
+    /// `TabStripStyle`).
+    #[dynamic(default)]
+    pub tab_strip_style: TabStripStyle,
+
     #[dynamic(default)]
     pub tab_bar_at_bottom: bool,
 
@@ -2324,4 +2330,18 @@ pub struct WindowEdge {
 
 fn default_edge_input() -> f64 {
     10.
+}
+
+/// How the fancy tab bar draws its tabs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic, Default)]
+pub enum TabStripStyle {
+    /// WezTerm's own.
+    #[default]
+    WezTerm,
+    /// Chrome's over a desktop theme: a 41-DIP strip; only the active tab
+    /// filled, joining what lies beneath through its feet (its colour
+    /// `colors.tab_bar.active_tab`); the others show the strip, filled
+    /// only under the pointer, parted by thin separators; a stroke round
+    /// the active tab where it would not stand out from the strip.
+    Chrome,
 }

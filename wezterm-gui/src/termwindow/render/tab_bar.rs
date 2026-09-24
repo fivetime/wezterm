@@ -111,6 +111,10 @@ impl crate::TermWindow {
         fontconfig: &wezterm_font::FontConfiguration,
         render_metrics: &RenderMetrics,
     ) -> anyhow::Result<f32> {
+        if config.use_fancy_tab_bar && config.tab_strip_style == config::TabStripStyle::Chrome {
+            let scale = fontconfig.get_dpi() as f32 / 96.;
+            return Ok((super::chrome_tabs::STRIP_HEIGHT * scale).round());
+        }
         if config.use_fancy_tab_bar {
             let font = fontconfig.title_font()?;
             Ok((font.metrics().cell_height.get() as f32 * 1.75).ceil())

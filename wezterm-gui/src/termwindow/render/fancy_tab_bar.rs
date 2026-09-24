@@ -3,6 +3,7 @@ use crate::tabbar::{TabBarItem, TabEntry};
 use crate::termwindow::box_model::*;
 use crate::termwindow::render::corners::*;
 
+use crate::termwindow::render::chrome_tabs;
 use crate::termwindow::render::window_buttons::window_button_element;
 use crate::termwindow::{UIItem, UIItemType};
 use crate::utilsprites::RenderMetrics;
@@ -11,6 +12,7 @@ use std::rc::Rc;
 use wezterm_font::LoadedFont;
 use wezterm_term::color::{ColorAttribute, ColorPalette};
 use window::IntegratedTitleButtonStyle;
+use window::RectF;
 
 const X_BUTTON: &[Poly] = &[
     Poly {
@@ -71,7 +73,12 @@ impl crate::TermWindow {
         let mut left_status = vec![];
         let mut left_eles = vec![];
         let mut right_eles = vec![];
-        let bar_colors = ElementColors {
+        // Chrome's strip: its sizes in DIP, the strip and the tabs'
+        // fills painted beneath the elements (paint_chrome_tabs)
+        let chrome = self.config.tab_strip_style == config::TabStripStyle::Chrome;
+        let scale = self.dimensions.dpi as f32 / 96.;
+        let dip = |v: f32| Dimension::Pixels((v * scale).round());
+        let mut bar_colors = ElementColors {
             border: BorderColor::default(),
             bg: if self.focused.is_some() {
                 self.config.window_frame.active_titlebar_bg
@@ -87,6 +94,30 @@ impl crate::TermWindow {
             }
             .to_linear()
             .into(),
+        };
+        if chrome {
+            bar_colors.bg = window::color::LinearRgba::TRANSPARENT.into();
+        }
+        let chrome_body = {
+            let tabs = items
+                .iter()
+                .filter(|i| matches!(i.item, TabBarItem::Tab { .. }))
+                .count();
+            // the room left by the window buttons and the new-tab button
+            let buttons: f32 = self
+                .config
+                .integrated_title_button_images
+                .values()
+                .map(|b| (b.width + b.margin_left + b.margin_right) as f32)
+                .sum::<f32>()
+                .max(if self.config.integrated_title_button_images.is_empty() {
+                    138.
+                } else {
+                    0.
+                });
+            let room = self.dimensions.pixel_width as f32
+                - (buttons + chrome_tabs::BUTTON + 2. * chrome_tabs::FOOT + 12.) * scale;
+            chrome_tabs::body_width(room, tabs, scale)
         };
         let tab_vertical_alignment = if self.config.tab_bar_at_bottom {
             VerticalAlign::Top
@@ -135,6 +166,43 @@ impl crate::TermWindow {
                     })
                     .border(BoxDimension::new(Dimension::Pixels(0.)))
                     .colors(bar_colors.clone()),
+                TabBarItem::NewTabButton if chrome => {
+                    let fg = new_tab.fg_color.to_linear();
+                    Element::new(
+                        &font,
+                        ElementContent::Poly {
+                            line_width: metrics.underline_height.max(2),
+                            poly: SizedPoly {
+                                poly: PLUS_BUTTON,
+                                width: dip(10.),
+                                height: dip(10.),
+                            },
+                        },
+                    )
+                    .vertical_align(VerticalAlign::Middle)
+                    .item_type(UIItemType::TabBar(item.item.clone()))
+                    .margin(BoxDimension {
+                        left: dip(2.),
+                        right: dip(0.),
+                        top: dip((chrome_tabs::STRIP_HEIGHT - chrome_tabs::BUTTON) / 2.),
+                        bottom: dip(0.),
+                    })
+                    .padding(BoxDimension::new(
+                        dip((chrome_tabs::BUTTON - 10.) / 2. - 1.),
+                    ))
+                    .border(BoxDimension::new(Dimension::Pixels(1.)))
+                    .border_corners(Some(chrome_circle(scale)))
+                    .colors(ElementColors {
+                        border: BorderColor::new(window::color::LinearRgba::TRANSPARENT),
+                        bg: window::color::LinearRgba::TRANSPARENT.into(),
+                        text: fg.into(),
+                    })
+                    .hover_colors(Some(ElementColors {
+                        border: BorderColor::new(fg.mul_alpha(chrome_tabs::HIGHLIGHT)),
+                        bg: fg.mul_alpha(chrome_tabs::HIGHLIGHT).into(),
+                        text: fg.into(),
+                    }))
+                }
                 TabBarItem::NewTabButton => Element::new(
                     &font,
                     ElementContent::Poly {
@@ -171,6 +239,53 @@ impl crate::TermWindow {
                     bg: new_tab_hover.bg_color.to_linear().into(),
                     text: new_tab_hover.fg_color.to_linear().into(),
                 })),
+                TabBarItem::Tab { active, .. } if chrome => {
+                    let tab = if active {
+                        active_tab.clone()
+                    } else {
+                        colors.inactive_tab()
+                    };
+                    let clear = window::color::LinearRgba::TRANSPARENT;
+                    let fg = fg_color.unwrap_or_else(|| tab.fg_color.into()).to_linear();
+                    // the line (the close button's 28, or the title's own
+                    // height) centred in the shape, above its 1-DIP
+                    // overlap; the title centred on that line
+                    let body = (chrome_tabs::STRIP_HEIGHT - chrome_tabs::TAB_TOP - 1.) * scale;
+                    let line = if self.config.show_close_tab_button_in_tabs {
+                        (chrome_tabs::BUTTON * scale).max(metrics.cell_size.height as f32)
+                    } else {
+                        metrics.cell_size.height as f32
+                    };
+                    let pad = ((body - line) / 2.).max(0.).floor();
+                    element
+                        .vertical_align(VerticalAlign::Top)
+                        .item_type(UIItemType::TabBar(item.item.clone()))
+                        .margin(BoxDimension {
+                            left: dip(chrome_tabs::GAP / 2.),
+                            right: dip(chrome_tabs::GAP / 2.),
+                            top: dip(chrome_tabs::TAB_TOP),
+                            bottom: dip(0.),
+                        })
+                        .padding(BoxDimension {
+                            left: dip(chrome_tabs::INSET),
+                            right: dip(chrome_tabs::INSET / 2.),
+                            top: Dimension::Pixels(pad),
+                            bottom: dip(0.),
+                        })
+                        .min_width(Some(Dimension::Pixels(chrome_body)))
+                        .min_height(Some(dip(chrome_tabs::STRIP_HEIGHT - chrome_tabs::TAB_TOP)))
+                        .border(BoxDimension::new(Dimension::Pixels(0.)))
+                        .colors(ElementColors {
+                            border: BorderColor::new(clear),
+                            bg: clear.into(),
+                            text: fg.into(),
+                        })
+                        .hover_colors(Some(ElementColors {
+                            border: BorderColor::new(clear),
+                            bg: clear.into(),
+                            text: fg.into(),
+                        }))
+                }
                 TabBarItem::Tab { active, .. } if active => element
                     .vertical_align(tab_vertical_alignment)
                     .item_type(UIItemType::TabBar(item.item.clone()))
@@ -405,15 +520,31 @@ impl crate::TermWindow {
                 }
                 TabBarItem::Tab { tab_idx, active } => {
                     let mut elem = item_to_elem(item);
-                    elem.max_width = Some(Dimension::Pixels(max_tab_width));
+                    elem.max_width = Some(Dimension::Pixels(if chrome {
+                        chrome_body
+                    } else {
+                        max_tab_width
+                    }));
                     elem.content = match elem.content {
                         ElementContent::Text(_) => unreachable!(),
                         ElementContent::Poly { .. }
                         | ElementContent::Icon { .. }
                         | ElementContent::Image { .. } => unreachable!(),
                         ElementContent::Children(mut kids) => {
+                            if chrome {
+                                kids = kids
+                                    .into_iter()
+                                    .map(|k| k.vertical_align(VerticalAlign::Middle))
+                                    .collect();
+                            }
                             if self.config.show_close_tab_button_in_tabs {
-                                kids.push(make_x_button(&font, &metrics, &colors, tab_idx, active));
+                                kids.push(if chrome {
+                                    make_chrome_x_button(
+                                        &font, &metrics, &colors, tab_idx, active, scale,
+                                    )
+                                } else {
+                                    make_x_button(&font, &metrics, &colors, tab_idx, active)
+                                });
                             }
                             ElementContent::Children(kids)
                         }
@@ -531,9 +662,164 @@ impl crate::TermWindow {
         let ui_items = computed.ui_items();
 
         let gl_state = self.render_state.as_ref().unwrap();
+        if self.config.tab_strip_style == config::TabStripStyle::Chrome {
+            self.paint_chrome_tabs(computed)?;
+        }
         self.render_element(&computed, gl_state, None)?;
 
         Ok(ui_items)
+    }
+}
+
+/// Chrome's tab strip beneath the elements: the strip in the frame's
+/// colour, separators between the unfilled tabs, the tab under the
+/// pointer filled lightly, the active tab filled with its feet and, where
+/// it would not stand out, stroked.
+impl crate::TermWindow {
+    fn paint_chrome_tabs(&self, computed: &ComputedElement) -> anyhow::Result<()> {
+        let scale = self.dimensions.dpi as f32 / 96.;
+        let focused = self.focused.is_some();
+        let frame: config::SrgbaTuple = if focused {
+            self.config.window_frame.active_titlebar_bg
+        } else {
+            self.config.window_frame.inactive_titlebar_bg
+        }
+        .into();
+        let frame_active: config::SrgbaTuple = self.config.window_frame.active_titlebar_bg.into();
+        let colors = self
+            .config
+            .colors
+            .as_ref()
+            .and_then(|c| c.tab_bar.as_ref())
+            .cloned()
+            .unwrap_or_else(TabBarColors::default);
+        let active: config::SrgbaTuple = colors.active_tab().bg_color.into();
+        let lin = |c: config::SrgbaTuple| c.to_linear();
+
+        let gl_state = self.render_state.as_ref().unwrap();
+        let layer = gl_state.layer_for_zindex(computed.zindex)?;
+        let mut layers = layer.quad_allocator();
+        let strip = computed.bounds;
+        self.filled_rectangle(&mut layers, 0, strip, lin(frame))?;
+
+        let mouse = self
+            .current_mouse_event
+            .as_ref()
+            .map(|e| (e.coords.x as f32, e.coords.y as f32));
+        let tabs = chrome_tabs::tabs(computed);
+        let hovered = |r: &RectF| {
+            mouse.is_some_and(|(x, y)| {
+                x >= r.min_x() && x < r.max_x() && y >= strip.min_y() && y < strip.max_y()
+            })
+        };
+        let foot = chrome_tabs::FOOT * scale;
+        let shape_of = |r: &RectF| {
+            euclid::rect(
+                r.min_x() - foot,
+                r.min_y(),
+                r.width() + 2. * foot,
+                strip.max_y() - r.min_y(),
+            )
+        };
+
+        // separators between two unfilled tabs
+        let (sw, sh) = (
+            chrome_tabs::SEPARATOR.0 * scale,
+            chrome_tabs::SEPARATOR.1 * scale,
+        );
+        for pair in tabs.windows(2) {
+            let ((a, a_active), (b, b_active)) = (pair[0], pair[1]);
+            if a_active || b_active || hovered(&a) || hovered(&b) {
+                continue;
+            }
+            let x = ((a.max_x() + b.min_x() - sw) / 2.).round();
+            let y = (a.min_y() + (a.height() - sh) / 2.).round();
+            self.filled_rectangle(&mut layers, 0, euclid::rect(x, y, sw, sh), lin(active))?;
+        }
+
+        let top = chrome_tabs::TOP_RADIUS * scale;
+        for (r, is_active) in &tabs {
+            if !is_active && hovered(r) {
+                let fill = chrome_tabs::hover(active, frame);
+                self.tab_shape_quad(&mut layers, 0, shape_of(r), top, foot, false, lin(fill))?;
+            }
+        }
+        if let Some((r, _)) = tabs.iter().find(|(_, a)| *a) {
+            self.tab_shape_quad(&mut layers, 0, shape_of(r), top, foot, false, lin(active))?;
+            // compared with the focused frame, so it does not come and go
+            // with the focus
+            if let Some(stroke) = chrome_tabs::stroke(active, frame_active) {
+                self.tab_shape_quad(&mut layers, 0, shape_of(r), top, foot, true, lin(stroke))?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Chrome's tab close button: a small cross in a 28-DIP circle that
+/// shows under the pointer.
+fn make_chrome_x_button(
+    font: &Rc<LoadedFont>,
+    metrics: &RenderMetrics,
+    colors: &TabBarColors,
+    tab_idx: usize,
+    active: bool,
+    scale: f32,
+) -> Element {
+    let fg = if active {
+        colors.active_tab().fg_color
+    } else {
+        colors.inactive_tab().fg_color
+    }
+    .to_linear();
+    let icon = (8. * scale).round();
+    Element::new(
+        &font,
+        ElementContent::Poly {
+            line_width: metrics.underline_height.max(2),
+            poly: SizedPoly {
+                poly: X_BUTTON,
+                width: Dimension::Pixels(icon),
+                height: Dimension::Pixels(icon),
+            },
+        },
+    )
+    .zindex(1)
+    .vertical_align(VerticalAlign::Middle)
+    .float(Float::Right)
+    .item_type(UIItemType::CloseTab(tab_idx))
+    .padding(BoxDimension::new(Dimension::Pixels(
+        ((chrome_tabs::BUTTON * scale - icon) / 2. - 1.)
+            .max(0.)
+            .round(),
+    )))
+    .border(BoxDimension::new(Dimension::Pixels(1.)))
+    .border_corners(Some(chrome_circle(scale)))
+    .colors(ElementColors {
+        border: BorderColor::new(window::color::LinearRgba::TRANSPARENT),
+        bg: window::color::LinearRgba::TRANSPARENT.into(),
+        text: fg.into(),
+    })
+    .hover_colors(Some(ElementColors {
+        border: BorderColor::new(fg.mul_alpha(chrome_tabs::HIGHLIGHT)),
+        bg: fg.mul_alpha(chrome_tabs::HIGHLIGHT).into(),
+        text: fg.into(),
+    }))
+}
+
+/// The rounded corners that make a 28-DIP button a circle.
+fn chrome_circle(scale: f32) -> Corners {
+    let r = Dimension::Pixels((chrome_tabs::BUTTON / 2. * scale).round());
+    let corner = |poly| SizedPoly {
+        width: r,
+        height: r,
+        poly,
+    };
+    Corners {
+        top_left: corner(TOP_LEFT_ROUNDED_CORNER),
+        top_right: corner(TOP_RIGHT_ROUNDED_CORNER),
+        bottom_left: corner(BOTTOM_LEFT_ROUNDED_CORNER),
+        bottom_right: corner(BOTTOM_RIGHT_ROUNDED_CORNER),
     }
 }
 

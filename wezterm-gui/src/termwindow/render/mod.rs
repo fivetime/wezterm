@@ -35,6 +35,7 @@ use wezterm_term::{CellAttributes, Line, StableRowIndex};
 use window::color::LinearRgba;
 
 pub mod borders;
+pub mod chrome_tabs;
 pub mod corners;
 pub mod draw;
 pub mod fancy_tab_bar;
@@ -284,6 +285,45 @@ impl crate::TermWindow {
         quad.set_fg_color(color);
         quad.set_hsv(None);
         Ok(quad)
+    }
+
+    /// A quad filled with `color` in the shape of a Chrome tab (see
+    /// `chrome_tabs::shape`) covering `rect`.
+    pub fn tab_shape_quad(
+        &self,
+        layers: &mut TripleLayerQuadAllocator,
+        layer_num: usize,
+        rect: RectF,
+        top: f32,
+        foot: f32,
+        outline: bool,
+        color: LinearRgba,
+    ) -> anyhow::Result<()> {
+        let left_offset = self.dimensions.pixel_width as f32 / 2.;
+        let top_offset = self.dimensions.pixel_height as f32 / 2.;
+        let gl_state = self.render_state.as_ref().unwrap();
+        let (w, h) = (rect.width().round() as u32, rect.height().round() as u32);
+        let sprite = gl_state.glyph_cache.borrow_mut().cached_tab_shape(
+            w,
+            h,
+            top.round() as u32,
+            foot.round() as u32,
+            outline,
+        )?;
+        let mut quad = layers.allocate(layer_num)?;
+        let (x, y) = (rect.min_x().round(), rect.min_y().round());
+        quad.set_position(
+            x - left_offset,
+            y - top_offset,
+            x + w as f32 - left_offset,
+            y + h as f32 - top_offset,
+        );
+        quad.set_texture(sprite.texture_coords());
+        quad.set_fg_color(color);
+        quad.set_alt_color_and_mix_value(color, 0.);
+        quad.set_hsv(None);
+        quad.set_has_color(false);
+        Ok(())
     }
 
     /// A quad showing the SVG icon at `path`, `size` pixels square, as a
