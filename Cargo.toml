@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "chrome-strip",
   "bidi",
   "bidi/generate",
   "strip-ansi-escapes",
@@ -246,6 +247,7 @@ wezterm-cell = { path = "wezterm-cell"}
 wezterm-char-props = { path = "wezterm-char-props", default-features=false }
 wezterm-client = { path = "wezterm-client" }
 wezterm-color-types = { version="0.3", path = "color-types", default-features=false }
+chrome-strip = { path = "chrome-strip" }
 wezterm-config-derive = { version="0.1", path="config/derive" }
 wezterm-dynamic = { version = "0.2.1", path = "wezterm-dynamic", default-features=false }
 wezterm-dynamic-derive = { version="0.1.1", path="wezterm-dynamic/derive" }

@@ -115,7 +115,7 @@ impl crate::TermWindow {
             // the strip's last DIP is under Chrome's toolbar: here the
             // terminal begins there
             let scale = fontconfig.get_dpi() as f32 / 96.;
-            return Ok((super::chrome_tabs::VISIBLE * scale).round());
+            return Ok(chrome_strip::dip(chrome_strip::VISIBLE, scale));
         }
         if config.use_fancy_tab_bar {
             let font = fontconfig.title_font()?;

@@ -47,6 +47,7 @@ dirs-next.workspace = true
 downcast-rs.workspace = true
 emojis.workspace = true
 env-bootstrap.workspace = true
+chrome-strip.workspace = true
 euclid.workspace = true
 fastrand.workspace = true
 filedescriptor.workspace = true

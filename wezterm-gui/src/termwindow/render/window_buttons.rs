@@ -1,6 +1,5 @@
 use crate::customglyph::*;
 use crate::termwindow::box_model::*;
-use crate::termwindow::render::chrome_tabs;
 use crate::termwindow::render::corners::*;
 use crate::termwindow::{TabBarItem, UIItemType};
 use crate::utilsprites::RenderMetrics;
@@ -245,6 +244,7 @@ pub fn window_button_element(
     font: &Rc<LoadedFont>,
     metrics: &RenderMetrics,
     config: &ConfigHandle,
+    scale: f32,
 ) -> Element {
     let style = config.integrated_title_button_style;
 
@@ -270,37 +270,35 @@ pub fn window_button_element(
             // area (NavButtonProviderGtk::RedrawImages): the picture with
             // its CSS margins and the bar's padding centred there, all of
             // it shrunk to fit when it would not
-            let top_area = chrome_tabs::VISIBLE as f64;
-            let needed = images.header_top
-                + images.margin_top
-                + images.height
-                + images.margin_bottom
-                + images.header_bottom;
-            let f = if needed > top_area {
-                top_area / needed
-            } else {
-                1.
-            };
-            let available = top_area - f * (images.header_top + images.header_bottom);
-            let button = f * (images.height + images.margin_top + images.margin_bottom);
-            let offset =
-                (f * (images.header_top + images.margin_top) + (available - button) / 2.).round();
+            let placed = chrome_strip::place_button(
+                &chrome_strip::ButtonImage {
+                    width: images.width as f32,
+                    height: images.height as f32,
+                    margin_left: images.margin_left as f32,
+                    margin_right: images.margin_right as f32,
+                    margin_top: images.margin_top as f32,
+                    margin_bottom: images.margin_bottom as f32,
+                    header_top: images.header_top as f32,
+                    header_bottom: images.header_bottom as f32,
+                },
+                scale,
+            );
             return Element::new(
                 font,
                 ElementContent::Image {
                     normal: images.normal.clone(),
                     hover: images.hover.clone(),
                     backdrop: images.backdrop.clone(),
-                    width: px((f * images.width).round()),
-                    height: px((f * images.height).round()),
+                    width: Dimension::Pixels(placed.width),
+                    height: Dimension::Pixels(placed.height),
                 },
             )
             .zindex(1)
             .vertical_align(VerticalAlign::Top)
             .margin(BoxDimension {
-                left: px((f * images.margin_left).round()),
-                right: px((f * images.margin_right).round()),
-                top: px(offset),
+                left: Dimension::Pixels(placed.margin_left),
+                right: Dimension::Pixels(placed.margin_right),
+                top: Dimension::Pixels(placed.top),
                 bottom: Dimension::Pixels(0.),
             })
             .item_type(UIItemType::TabBar(TabBarItem::WindowButton(window_button)));

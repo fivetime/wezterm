@@ -98,27 +98,10 @@ impl crate::TermWindow {
         if chrome {
             bar_colors.bg = window::color::LinearRgba::TRANSPARENT.into();
         }
-        let chrome_body = {
-            let tabs = items
-                .iter()
-                .filter(|i| matches!(i.item, TabBarItem::Tab { .. }))
-                .count();
-            // the room left by the window buttons and the new-tab button
-            let buttons: f32 = self
-                .config
-                .integrated_title_button_images
-                .values()
-                .map(|b| (b.width + b.margin_left + b.margin_right) as f32)
-                .sum::<f32>()
-                .max(if self.config.integrated_title_button_images.is_empty() {
-                    138.
-                } else {
-                    0.
-                });
-            let room = self.dimensions.pixel_width as f32
-                - (buttons + chrome_tabs::BUTTON + 2. * chrome_tabs::FOOT + 12.) * scale;
-            chrome_tabs::body_width(room, tabs, scale)
-        };
+        // Chrome's strip in pixels (the chrome-strip crate): every size
+        // and position below comes from it
+        let layout = self.chrome_layout(&font, &metrics)?;
+        let chrome_body = layout.body_width;
         let tab_vertical_alignment = if self.config.tab_bar_at_bottom || chrome {
             VerticalAlign::Top
         } else {
@@ -182,14 +165,20 @@ impl crate::TermWindow {
                     .vertical_align(VerticalAlign::Middle)
                     .item_type(UIItemType::TabBar(item.item.clone()))
                     .margin(BoxDimension {
-                        left: dip(2.),
+                        left: Dimension::Pixels(
+                            layout.new_tab.x
+                                - layout.bodies.last().map_or(0., |b| b + layout.body_width)
+                                - chrome_strip::dip(chrome_tabs::GAP / 2., scale),
+                        ),
                         right: dip(0.),
-                        top: dip(chrome_tabs::TAB_TOP),
+                        top: Dimension::Pixels(layout.new_tab.y),
                         bottom: dip(0.),
                     })
-                    .padding(BoxDimension::new(
-                        dip((chrome_tabs::BUTTON - 10.) / 2. - 1.),
-                    ))
+                    .padding(BoxDimension::new(Dimension::Pixels(
+                        ((layout.new_tab.w - chrome_strip::dip(10., scale)) / 2. - 1.)
+                            .max(0.)
+                            .floor(),
+                    )))
                     .border(BoxDimension::new(Dimension::Pixels(1.)))
                     .border_corners(Some(chrome_circle(scale)))
                     .colors(ElementColors {
@@ -260,10 +249,8 @@ impl crate::TermWindow {
                         .margin(BoxDimension {
                             left: dip(chrome_tabs::GAP / 2.),
                             right: dip(chrome_tabs::GAP / 2.),
-                            top: dip(chrome_tabs::TAB_TOP),
-                            bottom: dip(chrome_tabs::VISIBLE
-                                - chrome_tabs::TAB_TOP
-                                - chrome_tabs::HIGHLIGHT_HEIGHT),
+                            top: Dimension::Pixels(layout.tab_top),
+                            bottom: Dimension::Pixels(layout.tab_bottom_gap),
                         })
                         .padding(BoxDimension {
                             left: dip(chrome_tabs::INSET),
@@ -272,7 +259,7 @@ impl crate::TermWindow {
                             bottom: dip(0.),
                         })
                         .min_width(Some(Dimension::Pixels(chrome_body)))
-                        .min_height(Some(dip(chrome_tabs::HIGHLIGHT_HEIGHT)))
+                        .min_height(Some(Dimension::Pixels(layout.tab_height)))
                         .border(BoxDimension::new(Dimension::Pixels(0.)))
                         .colors(ElementColors {
                             border: BorderColor::new(clear),
@@ -473,6 +460,7 @@ impl crate::TermWindow {
                         &font,
                         &metrics,
                         &self.config,
+                        scale,
                     );
                     if !chrome {
                         return element;
@@ -487,7 +475,7 @@ impl crate::TermWindow {
                     };
                     Element::new(&font, ElementContent::Children(vec![element]))
                         .vertical_align(VerticalAlign::Top)
-                        .min_height(Some(dip(chrome_tabs::VISIBLE)))
+                        .min_height(Some(Dimension::Pixels(layout.height)))
                 }
             }
         };
@@ -543,24 +531,13 @@ impl crate::TermWindow {
                         // (Chrome: the body 12 DIP in, or past the
                         // buttons by the larger of 12 and the last
                         // button's own margin)
-                        let button_margin = left_buttons
-                            .last()
-                            .and_then(|b| {
-                                let key = match b {
-                                    IntegratedTitleButton::Hide => "minimize",
-                                    IntegratedTitleButton::Maximize => "maximize",
-                                    IntegratedTitleButton::Close => "close",
-                                };
-                                self.config.integrated_title_button_images.get(key)
-                            })
-                            .map(|i| i.margin_right as f32)
-                            .unwrap_or(0.);
-                        let lead = ((chrome_tabs::FOOT - button_margin).max(0.)
-                            - chrome_tabs::GAP / 2.)
-                            .max(0.);
                         left_eles.push(
-                            Element::new(&font, ElementContent::Text(String::new()))
-                                .min_width(Some(dip(lead))),
+                            Element::new(&font, ElementContent::Text(String::new())).min_width(
+                                Some(Dimension::Pixels(
+                                    (layout.lead - chrome_strip::dip(chrome_tabs::GAP / 2., scale))
+                                        .max(0.),
+                                )),
+                            ),
                         );
                     }
                     first_tab = false;
@@ -579,37 +556,18 @@ impl crate::TermWindow {
                             if chrome {
                                 // the title ends where the close button
                                 // begins (it floats over whatever is there)
-                                let mut room = chrome_body - 1.5 * chrome_tabs::INSET * scale;
-                                if self.config.show_close_tab_button_in_tabs {
-                                    room -= chrome_tabs::BUTTON * scale;
-                                }
+                                let room = layout.title_width;
                                 let title = kids
                                     .into_iter()
                                     .map(|k| k.vertical_align(VerticalAlign::Middle))
                                     .collect();
                                 // the title's baseline where Chrome's label
                                 // puts it, within the 28-DIP row
-                                let fm = font.metrics();
-                                let cell = metrics.cell_size.height as f32;
-                                let descender = metrics.descender.get() as f32;
-                                let baseline = chrome_tabs::title_baseline(
-                                    (fm.cell_height.get() as f64 + fm.descender.get()) as f32,
-                                    -fm.descender.get() as f32,
-                                    fm.cap_height.map(|c| c.get() as f32),
-                                    scale,
-                                );
-                                let title_top =
-                                    (baseline - chrome_tabs::TAB_TOP * scale - (cell + descender))
-                                        .round()
-                                        .clamp(
-                                            0.,
-                                            (chrome_tabs::HIGHLIGHT_HEIGHT * scale - cell).max(0.),
-                                        );
+                                let title_top = layout.title_top;
                                 // the favicon before it, as Chrome's
-                                let icon = self.config.tab_icon.as_ref().map(|path| {
-                                    let size = Dimension::Points(chrome_tabs::FAVICON * 0.75);
-                                    room -=
-                                        (chrome_tabs::FAVICON + chrome_tabs::FAVICON_GAP) * scale;
+                                let icon = layout.favicon.map(|favicon| {
+                                    let path = self.config.tab_icon.clone().unwrap_or_default();
+                                    let size = Dimension::Pixels(favicon.w);
                                     Element::new(
                                         &font,
                                         ElementContent::Image {
@@ -623,7 +581,9 @@ impl crate::TermWindow {
                                     .vertical_align(VerticalAlign::Middle)
                                     .margin(BoxDimension {
                                         left: dip(0.),
-                                        right: dip(chrome_tabs::FAVICON_GAP),
+                                        right: Dimension::Pixels(
+                                            layout.title_left - favicon.right(),
+                                        ),
                                         top: dip(0.),
                                         bottom: dip(0.),
                                     })
@@ -644,7 +604,13 @@ impl crate::TermWindow {
                             if self.config.show_close_tab_button_in_tabs {
                                 kids.push(if chrome {
                                     make_chrome_x_button(
-                                        &font, &metrics, &colors, tab_idx, active, scale,
+                                        &font,
+                                        &metrics,
+                                        &colors,
+                                        tab_idx,
+                                        active,
+                                        scale,
+                                        layout.close.map_or(0., |c| c.w),
                                     )
                                 } else {
                                     make_x_button(&font, &metrics, &colors, tab_idx, active)
@@ -777,6 +743,62 @@ impl crate::TermWindow {
     }
 }
 
+impl crate::TermWindow {
+    /// Chrome's strip laid out for this window: its width and scale, the
+    /// tabs, the desktop's caption buttons, the title font.
+    fn chrome_layout(
+        &self,
+        font: &Rc<LoadedFont>,
+        metrics: &RenderMetrics,
+    ) -> anyhow::Result<chrome_strip::Layout> {
+        let images = &self.config.integrated_title_button_images;
+        let image = |button: &IntegratedTitleButton| {
+            let key = match button {
+                IntegratedTitleButton::Hide => "minimize",
+                IntegratedTitleButton::Maximize => "maximize",
+                IntegratedTitleButton::Close => "close",
+            };
+            images.get(key).map(|i| chrome_strip::ButtonImage {
+                width: i.width as f32,
+                height: i.height as f32,
+                margin_left: i.margin_left as f32,
+                margin_right: i.margin_right as f32,
+                margin_top: i.margin_top as f32,
+                margin_bottom: i.margin_bottom as f32,
+                header_top: i.header_top as f32,
+                header_bottom: i.header_bottom as f32,
+            })
+        };
+        let (left, right) = self.config.integrated_title_button_sides();
+        let fm = font.metrics();
+        let cell = metrics.cell_size.height as f32;
+        let descender = metrics.descender.get() as f32;
+        Ok(chrome_strip::Layout::compute(&chrome_strip::Inputs {
+            scale: self.dimensions.dpi as f32 / 96.,
+            width_px: self.dimensions.pixel_width as f32,
+            tabs: self
+                .tab_bar
+                .items()
+                .iter()
+                .filter(|i| matches!(i.item, TabBarItem::Tab { .. }))
+                .count(),
+            left_buttons: left.iter().filter_map(image).collect(),
+            right_buttons: right.iter().filter_map(image).collect(),
+            // WezTerm's own drawn buttons, when the desktop gave none
+            drawn_buttons: if images.is_empty() { 138. } else { 0. },
+            close_buttons: self.config.show_close_tab_button_in_tabs,
+            favicons: self.config.tab_icon.is_some(),
+            font: chrome_strip::FontMetrics {
+                ascent: (fm.cell_height.get() + fm.descender.get()) as f32,
+                descent: -fm.descender.get() as f32,
+                cap_height: fm.cap_height.map(|c| c.get() as f32),
+                cell_height: cell,
+                baseline_in_cell: cell + descender,
+            },
+        }))
+    }
+}
+
 /// Chrome's tab strip beneath the elements: the strip in the frame's
 /// colour, separators between the unfilled tabs, the tab under the
 /// pointer filled lightly, the active tab filled with its feet and, where
@@ -813,6 +835,9 @@ impl crate::TermWindow {
             .as_ref()
             .map(|e| (e.coords.x as f32, e.coords.y as f32));
         let tabs = chrome_tabs::tabs(computed);
+        let font = self.fonts.title_font()?;
+        let metrics = RenderMetrics::with_font_metrics(&font.metrics());
+        let layout = self.chrome_layout(&font, &metrics)?;
         let hovered = |r: &RectF| {
             mouse.is_some_and(|(x, y)| {
                 x >= r.min_x() && x < r.max_x() && y >= strip.min_y() && y < strip.max_y()
@@ -828,24 +853,18 @@ impl crate::TermWindow {
             )
         };
 
-        // separators between two unfilled tabs
-        let (sw, sh) = (
-            chrome_tabs::SEPARATOR.0 * scale,
-            chrome_tabs::SEPARATOR.1 * scale,
-        );
+        // separators between two unfilled tabs (rounded, as Chrome's)
         for pair in tabs.windows(2) {
             let ((a, a_active), (b, b_active)) = (pair[0], pair[1]);
             if a_active || b_active || hovered(&a) || hovered(&b) {
                 continue;
             }
-            let x = ((a.max_x() + b.min_x() - sw) / 2.).round();
-            let y = (a.min_y() + (chrome_tabs::HIGHLIGHT_HEIGHT * scale - sh) / 2.).round();
-            // Chrome's separators are rounded (radius 1)
+            let s = layout.separator_between(a.min_x(), b.min_x());
             self.tab_shape_quad(
                 &mut layers,
                 0,
-                euclid::rect(x, y, sw, sh),
-                scale,
+                euclid::rect(s.x, strip.min_y() + s.y, s.w, s.h),
+                chrome_tabs::SEPARATOR_RADIUS * scale,
                 0.,
                 false,
                 lin(active),
@@ -889,6 +908,7 @@ fn make_chrome_x_button(
     tab_idx: usize,
     active: bool,
     scale: f32,
+    outer: f32,
 ) -> Element {
     let fg = if active {
         colors.active_tab().fg_color
@@ -913,9 +933,7 @@ fn make_chrome_x_button(
     .float(Float::Right)
     .item_type(UIItemType::CloseTab(tab_idx))
     .padding(BoxDimension::new(Dimension::Pixels(
-        (((chrome_tabs::BUTTON * scale).round() - icon) / 2. - 1.)
-            .max(0.)
-            .floor(),
+        ((outer - icon) / 2. - 1.).max(0.).floor(),
     )))
     .border(BoxDimension::new(Dimension::Pixels(1.)))
     .border_corners(Some(chrome_circle(scale)))

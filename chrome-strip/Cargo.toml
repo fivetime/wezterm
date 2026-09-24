@@ -1,0 +1,9 @@
+[package]
+name = "chrome-strip"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "The geometry and colour rules of Chromium's Linux tab strip, in pixels, with nothing to draw them"
+
+[dependencies]
+wezterm-color-types.workspace = true
