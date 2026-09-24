@@ -408,7 +408,9 @@ impl crate::TermWindow {
                     elem.max_width = Some(Dimension::Pixels(max_tab_width));
                     elem.content = match elem.content {
                         ElementContent::Text(_) => unreachable!(),
-                        ElementContent::Poly { .. } | ElementContent::Icon { .. } => unreachable!(),
+                        ElementContent::Poly { .. }
+                        | ElementContent::Icon { .. }
+                        | ElementContent::Image { .. } => unreachable!(),
                         ElementContent::Children(mut kids) => {
                             if self.config.show_close_tab_button_in_tabs {
                                 kids.push(make_x_button(&font, &metrics, &colors, tab_idx, active));

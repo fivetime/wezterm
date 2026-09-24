@@ -403,6 +403,15 @@ pub enum ElementContent {
         path: String,
         size: Dimension,
     },
+    /// A picture file (PNG) drawn as it is: `hover` under the pointer,
+    /// `backdrop` while the window lacks the focus
+    Image {
+        normal: String,
+        hover: Option<String>,
+        backdrop: Option<String>,
+        width: Dimension,
+        height: Dimension,
+    },
 }
 
 pub struct LayoutContext<'a> {
@@ -449,7 +458,9 @@ impl ComputedElement {
                 }
             }
             ComputedElementContent::Text(_) => {}
-            ComputedElementContent::Poly { .. } | ComputedElementContent::Icon { .. } => {}
+            ComputedElementContent::Poly { .. }
+            | ComputedElementContent::Icon { .. }
+            | ComputedElementContent::Image { .. } => {}
         }
     }
 
@@ -477,7 +488,9 @@ impl ComputedElement {
                     kid.ui_item_impl(items);
                 }
             }
-            ComputedElementContent::Poly { .. } | ComputedElementContent::Icon { .. } => {}
+            ComputedElementContent::Poly { .. }
+            | ComputedElementContent::Icon { .. }
+            | ComputedElementContent::Image { .. } => {}
         }
     }
 }
@@ -493,6 +506,13 @@ pub enum ComputedElementContent {
     Icon {
         path: String,
         size: f32,
+    },
+    Image {
+        normal: String,
+        hover: Option<String>,
+        backdrop: Option<String>,
+        width: f32,
+        height: f32,
     },
 }
 
@@ -856,6 +876,39 @@ impl super::TermWindow {
                     },
                 })
             }
+            ElementContent::Image {
+                normal,
+                hover,
+                backdrop,
+                width,
+                height,
+            } => {
+                let width = width.evaluate_as_pixels(context.width).round();
+                let height = height.evaluate_as_pixels(context.height).round();
+                let content_rect = euclid::rect(0., 0., width, height.max(min_height));
+                let rects = element.compute_rects(context, content_rect);
+
+                Ok(ComputedElement {
+                    item_type: element.item_type.clone(),
+                    zindex: element.zindex + context.zindex,
+                    baseline,
+                    border,
+                    border_corners,
+                    colors: element.colors.clone(),
+                    hover_colors: element.hover_colors.clone(),
+                    bounds: rects.bounds,
+                    border_rect: rects.border_rect,
+                    padding: rects.padding,
+                    content_rect: rects.content_rect,
+                    content: ComputedElementContent::Image {
+                        normal: normal.clone(),
+                        hover: hover.clone(),
+                        backdrop: backdrop.clone(),
+                        width,
+                        height,
+                    },
+                })
+            }
         }
     }
 
@@ -868,27 +921,20 @@ impl super::TermWindow {
         let layer = gl_state.layer_for_zindex(element.zindex)?;
         let mut layers = layer.quad_allocator();
 
-        let colors = match &element.hover_colors {
-            Some(hc) => {
-                let hovering =
-                    match &self.current_mouse_event {
-                        Some(event) => {
-                            let mouse_x = event.coords.x as f32;
-                            let mouse_y = event.coords.y as f32;
-                            mouse_x >= element.bounds.min_x()
-                                && mouse_x <= element.bounds.max_x()
-                                && mouse_y >= element.bounds.min_y()
-                                && mouse_y <= element.bounds.max_y()
-                        }
-                        None => false,
-                    } && matches!(self.current_mouse_capture, None | Some(MouseCapture::UI));
-                if hovering {
-                    hc
-                } else {
-                    &element.colors
-                }
+        let hovering = match &self.current_mouse_event {
+            Some(event) => {
+                let mouse_x = event.coords.x as f32;
+                let mouse_y = event.coords.y as f32;
+                mouse_x >= element.bounds.min_x()
+                    && mouse_x <= element.bounds.max_x()
+                    && mouse_y >= element.bounds.min_y()
+                    && mouse_y <= element.bounds.max_y()
             }
-            None => &element.colors,
+            None => false,
+        } && matches!(self.current_mouse_capture, None | Some(MouseCapture::UI));
+        let colors = match &element.hover_colors {
+            Some(hc) if hovering => hc,
+            _ => &element.colors,
         };
 
         self.render_element_background(element, colors, &mut layers, inherited_colors)?;
@@ -985,6 +1031,25 @@ impl super::TermWindow {
                 if let Some(mut quad) = self.icon_quad(&mut layers, 1, origin, path, *size)? {
                     self.resolve_text(colors, inherited_colors).apply(&mut quad);
                 }
+            }
+            ComputedElementContent::Image {
+                normal,
+                hover,
+                backdrop,
+                width,
+                height,
+            } => {
+                let path = if hovering {
+                    hover.as_ref().unwrap_or(normal)
+                } else if self.focused.is_none() {
+                    backdrop.as_ref().unwrap_or(normal)
+                } else {
+                    normal
+                };
+                let top = element.content_rect.min_y()
+                    + ((element.content_rect.height() - height) / 2.).max(0.);
+                let origin = euclid::point2(element.content_rect.min_x(), top.round());
+                self.image_quad(&mut layers, 1, origin, path, *width, *height)?;
             }
         }
 

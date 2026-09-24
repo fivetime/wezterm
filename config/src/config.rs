@@ -107,6 +107,14 @@ pub struct Config {
     #[dynamic(default)]
     pub integrated_title_button_icons: HashMap<String, String>,
 
+    /// The integrated title buttons as the desktop's toolkit draws them:
+    /// finished pictures (PNG) per state, keyed `close`, `minimize`,
+    /// `maximize` and `restore` — what a GTK desktop's theme renders for
+    /// its own title buttons, the way Chrome takes them. They replace the
+    /// style's drawing, colours and hover backdrop included.
+    #[dynamic(default)]
+    pub integrated_title_button_images: HashMap<String, TitleButtonImages>,
+
     #[dynamic(default)]
     pub integrated_title_button_style: IntegratedTitleButtonStyle,
 
@@ -2260,4 +2268,25 @@ fn default_macos_forward_mods() -> Modifiers {
 
 fn default_colr_rasterizer() -> FontRasterizerSelection {
     FontRasterizerSelection::Harfbuzz
+}
+
+/// One integrated title button as finished pictures (see
+/// `integrated_title_button_images`); sizes and margins in pixels at 96
+/// dpi, the pictures drawn to fit.
+#[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
+pub struct TitleButtonImages {
+    /// The button at rest.
+    pub normal: String,
+    /// Under the pointer (else `normal`).
+    #[dynamic(default)]
+    pub hover: Option<String>,
+    /// In a window without the focus (else `normal`).
+    #[dynamic(default)]
+    pub backdrop: Option<String>,
+    pub width: f64,
+    pub height: f64,
+    #[dynamic(default)]
+    pub margin_left: f64,
+    #[dynamic(default)]
+    pub margin_right: f64,
 }

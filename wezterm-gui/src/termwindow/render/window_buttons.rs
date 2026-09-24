@@ -251,6 +251,40 @@ pub fn window_button_element(
         return Element::new(font, ElementContent::Text(String::new()));
     }
 
+    // the desktop toolkit's own finished button, where one is given
+    let key = match window_button {
+        IntegratedTitleButton::Hide => "minimize",
+        IntegratedTitleButton::Maximize if is_maximized => "restore",
+        IntegratedTitleButton::Maximize => "maximize",
+        IntegratedTitleButton::Close => "close",
+    };
+    let images = &config.integrated_title_button_images;
+    if let Some(images) = images
+        .get(key)
+        .or_else(|| (key == "restore").then(|| images.get("maximize")).flatten())
+    {
+        let px = |v: f64| Dimension::Points(v as f32 * 0.75);
+        return Element::new(
+            font,
+            ElementContent::Image {
+                normal: images.normal.clone(),
+                hover: images.hover.clone(),
+                backdrop: images.backdrop.clone(),
+                width: px(images.width),
+                height: px(images.height),
+            },
+        )
+        .zindex(1)
+        .vertical_align(VerticalAlign::Middle)
+        .margin(BoxDimension {
+            left: px(images.margin_left),
+            right: px(images.margin_right),
+            top: Dimension::Pixels(0.),
+            bottom: Dimension::Pixels(0.),
+        })
+        .item_type(UIItemType::TabBar(TabBarItem::WindowButton(window_button)));
+    }
+
     let poly = {
         let (close, hide, maximize, restore) = match style {
             Style::Windows => {

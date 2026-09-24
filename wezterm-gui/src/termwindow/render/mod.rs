@@ -323,6 +323,44 @@ impl crate::TermWindow {
         Ok(Some(quad))
     }
 
+    /// A quad showing the picture at `path` as it is, `width` by `height`
+    /// pixels; nothing when the file cannot be read.
+    pub fn image_quad<'a>(
+        &self,
+        layers: &'a mut TripleLayerQuadAllocator,
+        layer_num: usize,
+        point: PointF,
+        path: &str,
+        width: f32,
+        height: f32,
+    ) -> anyhow::Result<()> {
+        let left_offset = self.dimensions.pixel_width as f32 / 2.;
+        let top_offset = self.dimensions.pixel_height as f32 / 2.;
+        let gl_state = self.render_state.as_ref().unwrap();
+        let sprite = match gl_state.glyph_cache.borrow_mut().cached_picture(
+            path,
+            width as u32,
+            height as u32,
+        )? {
+            Some(sprite) => sprite.texture_coords(),
+            None => return Ok(()),
+        };
+
+        let mut quad = layers.allocate(layer_num)?;
+        quad.set_position(
+            point.x - left_offset,
+            point.y - top_offset,
+            (point.x + width) - left_offset,
+            (point.y + height) - top_offset,
+        );
+        quad.set_texture(sprite);
+        quad.set_fg_color(LinearRgba::TRANSPARENT);
+        quad.set_alt_color_and_mix_value(LinearRgba::TRANSPARENT, 0.);
+        quad.set_hsv(None);
+        quad.set_has_color(true);
+        Ok(())
+    }
+
     pub fn poly_quad<'a>(
         &self,
         layers: &'a mut TripleLayerQuadAllocator,

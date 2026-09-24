@@ -568,6 +568,8 @@ pub struct GlyphCache {
     /// SVG icons by file and pixel size; `None` for a file that would not
     /// draw, so it is not read again
     icon_glyphs: HashMap<(String, u32), Option<Sprite>>,
+    /// Pictures by file and pixel size, as `icon_glyphs`
+    picture_glyphs: HashMap<(String, u32, u32), Option<Sprite>>,
     pub cursor_glyphs: HashMap<(Option<CursorShape>, u8), Sprite>,
     pub color: HashMap<(RgbColor, NotNan<f32>), Sprite>,
     min_frame_duration: Duration,
@@ -592,6 +594,7 @@ impl GlyphCache {
             line_glyphs: HashMap::new(),
             block_glyphs: HashMap::new(),
             icon_glyphs: HashMap::new(),
+            picture_glyphs: HashMap::new(),
             cursor_glyphs: HashMap::new(),
             color: HashMap::new(),
             min_frame_duration: Duration::from_millis(1000 / fonts.config().max_fps as u64),
@@ -622,6 +625,7 @@ impl GlyphCache {
             line_glyphs: HashMap::new(),
             block_glyphs: HashMap::new(),
             icon_glyphs: HashMap::new(),
+            picture_glyphs: HashMap::new(),
             cursor_glyphs: HashMap::new(),
             color: HashMap::new(),
             min_frame_duration: Duration::from_millis(1000 / fonts.config().max_fps as u64),
@@ -1157,6 +1161,29 @@ impl GlyphCache {
         Ok(sprite)
     }
 
+    /// The picture at `path` scaled to `width` by `height` pixels, in its
+    /// own colours; `None`, logged once, when it cannot be read.
+    pub fn cached_picture(
+        &mut self,
+        path: &str,
+        width: u32,
+        height: u32,
+    ) -> anyhow::Result<Option<Sprite>> {
+        let key = (path.to_string(), width, height);
+        if let Some(sprite) = self.picture_glyphs.get(&key) {
+            return Ok(sprite.clone());
+        }
+        let sprite = match picture_image(path, width, height) {
+            Ok(image) => Some(self.atlas.allocate(&image)?),
+            Err(err) => {
+                log::warn!("picture {path}: {err:#}");
+                None
+            }
+        };
+        self.picture_glyphs.insert(key, sprite.clone());
+        Ok(sprite)
+    }
+
     pub fn cached_block(
         &mut self,
         block: BlockKey,
@@ -1424,4 +1451,26 @@ fn icon_image(path: &str, size: u32) -> anyhow::Result<Image> {
         .flat_map(|pixel| [pixel[3]; 4])
         .collect();
     Ok(Image::from_raw(size as usize, size as usize, mask))
+}
+
+/// A picture file scaled to `width` by `height` pixels (it was drawn
+/// larger, for sharpness), straight RGBA as the atlas keeps colour images.
+fn picture_image(path: &str, width: u32, height: u32) -> anyhow::Result<Image> {
+    let picture = image::open(path)?.to_rgba8();
+    let (width, height) = (width.max(1), height.max(1));
+    let picture = if picture.dimensions() == (width, height) {
+        picture
+    } else {
+        image::imageops::resize(
+            &picture,
+            width,
+            height,
+            image::imageops::FilterType::CatmullRom,
+        )
+    };
+    Ok(Image::from_raw(
+        width as usize,
+        height as usize,
+        picture.into_raw(),
+    ))
 }
