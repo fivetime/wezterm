@@ -127,6 +127,20 @@ impl super::TermWindow {
 
         self.current_mouse_event.replace(event.clone());
 
+        // a tab under the pointer brings up its card, after a moment
+        let hovered_tab = match self.resolve_ui_item(&event).map(|i| i.item_type) {
+            Some(UIItemType::TabBar(TabBarItem::Tab { tab_idx, .. }))
+            | Some(UIItemType::CloseTab(tab_idx)) => Some(tab_idx),
+            _ => None,
+        };
+        self.hover_tab(
+            hovered_tab,
+            !matches!(
+                event.kind,
+                WMEK::Move | WMEK::VertWheel(_) | WMEK::HorzWheel(_)
+            ),
+        );
+
         // a modal that takes the mouse (a popup menu) sees it first
         if let Some(modal) = self.get_modal() {
             if modal.window_mouse_event(&event, self) {
@@ -330,6 +344,7 @@ impl super::TermWindow {
 
     pub fn mouse_leave_impl(&mut self, context: &dyn WindowOps) {
         self.current_mouse_event = None;
+        self.hover_tab(None, false);
         self.update_title();
         context.set_cursor(Some(CursorIcon::Default));
         context.invalidate();

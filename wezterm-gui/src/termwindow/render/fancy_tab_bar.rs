@@ -532,10 +532,19 @@ impl crate::TermWindow {
                         | ElementContent::Image { .. } => unreachable!(),
                         ElementContent::Children(mut kids) => {
                             if chrome {
-                                kids = kids
+                                // the title ends where the close button
+                                // begins (it floats over whatever is there)
+                                let mut room = chrome_body - 1.5 * chrome_tabs::INSET * scale;
+                                if self.config.show_close_tab_button_in_tabs {
+                                    room -= chrome_tabs::BUTTON * scale;
+                                }
+                                let title = kids
                                     .into_iter()
                                     .map(|k| k.vertical_align(VerticalAlign::Middle))
                                     .collect();
+                                kids = vec![Element::new(&font, ElementContent::Children(title))
+                                    .vertical_align(VerticalAlign::Middle)
+                                    .max_width(Some(Dimension::Pixels(room.max(0.))))];
                             }
                             if self.config.show_close_tab_button_in_tabs {
                                 kids.push(if chrome {

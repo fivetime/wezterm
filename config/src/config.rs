@@ -523,6 +523,12 @@ pub struct Config {
     #[dynamic(default)]
     pub tab_strip_style: TabStripStyle,
 
+    /// Resting the pointer on a tab shows a card under it (its name, a
+    /// line about it, the last lines of its screen; see the
+    /// `tab-hover-card` event), as Chrome's hover cards.
+    #[dynamic(default)]
+    pub show_tab_hover_cards: bool,
+
     #[dynamic(default)]
     pub tab_bar_at_bottom: bool,
 

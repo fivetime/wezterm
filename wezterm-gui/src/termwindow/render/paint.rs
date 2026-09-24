@@ -276,6 +276,7 @@ impl crate::TermWindow {
             .context("paint_window_borders")?;
         drop(layers);
         self.paint_modal().context("paint_modal")?;
+        self.paint_hover_card().context("paint_hover_card")?;
         self.clear_edge_corners().context("clear_edge_corners")?;
 
         Ok(())
