@@ -370,6 +370,23 @@ impl WindowOps for Window {
         }
     }
 
+    fn resizes_from_own_edges(&self) -> bool {
+        match self {
+            Self::X11(x) => x.resizes_from_own_edges(),
+            // the client-side frame has its own resize edges
+            #[cfg(feature = "wayland")]
+            Self::Wayland(_) => false,
+        }
+    }
+
+    fn request_drag_resize(&self, edge: crate::ResizeEdge) {
+        match self {
+            Self::X11(x) => x.request_drag_resize(edge),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(_) => {}
+        }
+    }
+
     fn set_window_drag_position(&self, coords: ScreenPoint) {
         match self {
             Self::X11(x) => x.set_window_drag_position(coords),

@@ -51,6 +51,20 @@ impl Default for Clipboard {
     }
 }
 
+/// An edge or corner a window is resized from, in the order of the
+/// EWMH `_NET_WM_MOVERESIZE_SIZE_*` directions (0 to 7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeEdge {
+    TopLeft,
+    Top,
+    TopRight,
+    Right,
+    BottomRight,
+    Bottom,
+    BottomLeft,
+    Left,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Dimensions {
     pub pixel_width: usize,
@@ -283,6 +297,17 @@ pub trait WindowOps {
     /// This is only implemented on backends that handle
     /// window movement on the server side (Wayland).
     fn request_drag_move(&self) {}
+
+    /// Whether a window whose decorations integrate the buttons has no
+    /// frame of the window manager's to be resized by, and resizes from
+    /// its own edges instead (`request_drag_resize`): X11.
+    fn resizes_from_own_edges(&self) -> bool {
+        false
+    }
+
+    /// Requests the windowing system to start resizing the window from
+    /// `edge`, the pointer being at the last `set_window_drag_position`.
+    fn request_drag_resize(&self, _edge: ResizeEdge) {}
 
     /// Signal to the windowing system that the mouse is over
     /// a window dragging area.

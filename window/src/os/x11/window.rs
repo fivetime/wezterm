@@ -1296,10 +1296,12 @@ impl XWindowInner {
 
         let decorations = if decorations == WindowDecorations::TITLE | WindowDecorations::RESIZE {
             FUNC_ALL
-        } else if decorations == WindowDecorations::RESIZE
-            || decorations == WindowDecorations::INTEGRATED_BUTTONS
-            || decorations == WindowDecorations::INTEGRATED_BUTTONS | WindowDecorations::RESIZE
-        {
+        } else if decorations.contains(WindowDecorations::INTEGRATED_BUTTONS) {
+            // no decorations at all: KWin draws its whole frame, title
+            // included, for anything else (a border alone too); the window
+            // resizes from its own edges (`request_drag_resize`)
+            0
+        } else if decorations == WindowDecorations::RESIZE {
             FUNC_RESIZE
         } else if decorations == WindowDecorations::TITLE {
             FUNC_MOVE | FUNC_MINIMIZE | FUNC_MAXIMIZE | FUNC_CLOSE
@@ -1772,6 +1774,17 @@ impl XWindowInner {
         Ok(())
     }
 
+    /// Resizing from `edge` by the window manager, as a drag from where
+    /// the pointer went down (the edges are the window's own: it asked
+    /// for no frame, see `adjust_decorations`).
+    fn request_drag_resize(&mut self, edge: crate::ResizeEdge) -> anyhow::Result<()> {
+        let pos = self.window_drag_position.unwrap_or_default();
+        // ResizeEdge is in the order of _NET_WM_MOVERESIZE_SIZE_TOPLEFT (0)
+        // to _NET_WM_MOVERESIZE_SIZE_LEFT (7)
+        self.net_wm_moveresize(pos.x as u32, pos.y as u32, edge as u32, 1);
+        Ok(())
+    }
+
     fn set_window_position(&mut self, coords: ScreenPoint) {
         if self.dragging {
             return;
@@ -2076,6 +2089,19 @@ impl WindowOps for XWindow {
     fn request_drag_move(&self) {
         XConnection::with_window_inner(self.0, move |inner| {
             inner.request_drag_move()?;
+            Ok(())
+        });
+    }
+
+    /// X11 draws no frame for a window whose decorations integrate the
+    /// buttons (see `adjust_decorations`); the caller knows its config.
+    fn resizes_from_own_edges(&self) -> bool {
+        true
+    }
+
+    fn request_drag_resize(&self, edge: crate::ResizeEdge) {
+        XConnection::with_window_inner(self.0, move |inner| {
+            inner.request_drag_resize(edge)?;
             Ok(())
         });
     }

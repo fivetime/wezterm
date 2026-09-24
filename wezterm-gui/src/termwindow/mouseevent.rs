@@ -3,7 +3,7 @@ use crate::termwindow::{
     GuiWin, MouseCapture, PositionedSplit, ScrollHit, TermWindowNotif, UIItem, UIItemType, TMB,
 };
 use ::window::{
-    CursorIcon, MouseButtons as WMB, MouseEvent, MouseEventKind as WMEK, MousePress,
+    CursorIcon, MouseButtons as WMB, MouseEvent, MouseEventKind as WMEK, MousePress, ResizeEdge,
     WindowDecorations, WindowOps, WindowState,
 };
 use config::keyassignment::{KeyAssignment, MouseEventTrigger, SpawnTabDomain};
@@ -23,7 +23,65 @@ use wezterm_dynamic::ToDynamic;
 use wezterm_term::input::{MouseButton, MouseEventKind as TMEK};
 use wezterm_term::{ClickPosition, LastMouseClick, StableRowIndex};
 
+/// The pointer for resizing from `edge`.
+fn resize_cursor(edge: ResizeEdge) -> CursorIcon {
+    match edge {
+        ResizeEdge::TopLeft => CursorIcon::NwResize,
+        ResizeEdge::Top => CursorIcon::NResize,
+        ResizeEdge::TopRight => CursorIcon::NeResize,
+        ResizeEdge::Right => CursorIcon::EResize,
+        ResizeEdge::BottomRight => CursorIcon::SeResize,
+        ResizeEdge::Bottom => CursorIcon::SResize,
+        ResizeEdge::BottomLeft => CursorIcon::SwResize,
+        ResizeEdge::Left => CursorIcon::WResize,
+    }
+}
+
 impl super::TermWindow {
+    /// The edge (or corner, which reaches further along the edges) of a
+    /// window that resizes from its own edges, when the pointer is on it
+    /// and the window is neither maximized nor full screen.
+    fn own_resize_edge(&self, event: &MouseEvent, context: &dyn WindowOps) -> Option<ResizeEdge> {
+        let decorations = self.config.window_decorations;
+        if !decorations.contains(WindowDecorations::INTEGRATED_BUTTONS | WindowDecorations::RESIZE)
+            || !context.resizes_from_own_edges()
+            || self
+                .window_state
+                .intersects(WindowState::MAXIMIZED | WindowState::FULL_SCREEN)
+        {
+            return None;
+        }
+        let margin = ((self.dimensions.dpi as f32 / 96.) * 5.).max(3.) as isize;
+        let corner = margin * 3;
+        let (x, y) = (event.coords.x, event.coords.y);
+        let (w, h) = (
+            self.dimensions.pixel_width as isize,
+            self.dimensions.pixel_height as isize,
+        );
+        let (left, right, top, bottom) = (x < margin, x >= w - margin, y < margin, y >= h - margin);
+        let (near_left, near_right) = (x < corner, x >= w - corner);
+        let (near_top, near_bottom) = (y < corner, y >= h - corner);
+        Some(if (top && near_left) || (left && near_top) {
+            ResizeEdge::TopLeft
+        } else if (top && near_right) || (right && near_top) {
+            ResizeEdge::TopRight
+        } else if (bottom && near_left) || (left && near_bottom) {
+            ResizeEdge::BottomLeft
+        } else if (bottom && near_right) || (right && near_bottom) {
+            ResizeEdge::BottomRight
+        } else if top {
+            ResizeEdge::Top
+        } else if bottom {
+            ResizeEdge::Bottom
+        } else if left {
+            ResizeEdge::Left
+        } else if right {
+            ResizeEdge::Right
+        } else {
+            return None;
+        })
+    }
+
     fn resolve_ui_item(&self, event: &MouseEvent) -> Option<UIItem> {
         let x = event.coords.x;
         let y = event.coords.y;
@@ -73,6 +131,23 @@ impl super::TermWindow {
         if let Some(modal) = self.get_modal() {
             if modal.window_mouse_event(&event, self) {
                 return;
+            }
+        }
+
+        // no frame to resize by (X11 with the buttons in the tab bar): the
+        // window's own edges resize it, as Chrome's do
+        if let Some(edge) = self.own_resize_edge(&event, context) {
+            match event.kind {
+                WMEK::Move if self.current_mouse_buttons.is_empty() => {
+                    context.set_cursor(Some(resize_cursor(edge)));
+                    return;
+                }
+                WMEK::Press(MousePress::Left) => {
+                    context.set_window_drag_position(event.screen_coords);
+                    context.request_drag_resize(edge);
+                    return;
+                }
+                _ => {}
             }
         }
 
