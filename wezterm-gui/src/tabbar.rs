@@ -12,7 +12,7 @@ use termwiz::escape::{Action, ControlCode, CSI};
 use termwiz::surface::SEQ_ZERO;
 use termwiz_funcs::{format_as_escapes, FormatColor, FormatItem};
 use wezterm_term::{Line, Progress};
-use window::{IntegratedTitleButton, IntegratedTitleButtonAlignment, IntegratedTitleButtonStyle};
+use window::{IntegratedTitleButton, IntegratedTitleButtonStyle};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TabBarState {
@@ -336,6 +336,7 @@ impl TabBarState {
         items: &mut Vec<TabEntry>,
         line: &mut Line,
         colors: &TabBarColors,
+        buttons: &[IntegratedTitleButton],
     ) {
         let default_cell = if config.use_fancy_tab_bar {
             CellAttributes::default()
@@ -370,7 +371,7 @@ impl TabBarState {
             default_cell_hover.clone(),
         );
 
-        for button in &config.integrated_title_buttons {
+        for button in buttons {
             use IntegratedTitleButton as Button;
             let title = match button {
                 Button::Hide => {
@@ -458,6 +459,13 @@ impl TabBarState {
         let use_integrated_title_buttons = config
             .window_decorations
             .contains(window::WindowDecorations::INTEGRATED_BUTTONS);
+        let (left_buttons, right_buttons) = if use_integrated_title_buttons
+            && config.integrated_title_button_style != IntegratedTitleButtonStyle::MacOsNative
+        {
+            config.integrated_title_button_sides()
+        } else {
+            (vec![], vec![])
+        };
 
         // We ultimately want to produce a line looking like this:
         // ` | tab1-title x | tab2-title x |  +      . - X `
@@ -524,11 +532,16 @@ impl TabBarState {
             }
         }
 
-        if use_integrated_title_buttons
-            && config.integrated_title_button_style != IntegratedTitleButtonStyle::MacOsNative
-            && config.integrated_title_button_alignment == IntegratedTitleButtonAlignment::Left
-        {
-            Self::integrated_title_buttons(mouse_x, &mut x, config, &mut items, &mut line, &colors);
+        if !left_buttons.is_empty() {
+            Self::integrated_title_buttons(
+                mouse_x,
+                &mut x,
+                config,
+                &mut items,
+                &mut line,
+                &colors,
+                &left_buttons,
+            );
         }
 
         let left_status_line = parse_status_text(left_status, black_cell.attrs().clone());
@@ -621,10 +634,7 @@ impl TabBarState {
         }
 
         // Reserve place for integrated title buttons
-        let title_width = if use_integrated_title_buttons
-            && config.integrated_title_button_style != IntegratedTitleButtonStyle::MacOsNative
-            && config.integrated_title_button_alignment == IntegratedTitleButtonAlignment::Right
-        {
+        let title_width = if !right_buttons.is_empty() {
             let window_hide =
                 parse_status_text(&config.tab_bar_style.window_hide, CellAttributes::default());
             let window_hide_hover = parse_status_text(
@@ -654,7 +664,7 @@ impl TabBarState {
             let close_len = window_close.len().max(window_close_hover.len());
 
             let mut width_to_reserve = 0;
-            for button in &config.integrated_title_buttons {
+            for button in &right_buttons {
                 use IntegratedTitleButton as Button;
                 let button_len = match button {
                     Button::Hide => hide_len,
@@ -688,12 +698,17 @@ impl TabBarState {
             line.insert_cell(x, black_cell.clone(), title_width, SEQ_ZERO);
         }
 
-        if use_integrated_title_buttons
-            && config.integrated_title_button_style != IntegratedTitleButtonStyle::MacOsNative
-            && config.integrated_title_button_alignment == IntegratedTitleButtonAlignment::Right
-        {
+        if !right_buttons.is_empty() {
             x = title_width;
-            Self::integrated_title_buttons(mouse_x, &mut x, config, &mut items, &mut line, &colors);
+            Self::integrated_title_buttons(
+                mouse_x,
+                &mut x,
+                config,
+                &mut items,
+                &mut line,
+                &colors,
+                &right_buttons,
+            );
         }
 
         Self {

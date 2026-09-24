@@ -10,7 +10,7 @@ use config::{Dimension, DimensionContext, TabBarColors};
 use std::rc::Rc;
 use wezterm_font::LoadedFont;
 use wezterm_term::color::{ColorAttribute, ColorPalette};
-use window::{IntegratedTitleButtonAlignment, IntegratedTitleButtonStyle};
+use window::IntegratedTitleButtonStyle;
 
 const X_BUTTON: &[Poly] = &[
     Poly {
@@ -391,14 +391,13 @@ impl crate::TermWindow {
             );
         }
 
+        let (left_buttons, _) = self.config.integrated_title_button_sides();
         for item in items {
             match item.item {
                 TabBarItem::LeftStatus => left_status.push(item_to_elem(item)),
                 TabBarItem::None | TabBarItem::RightStatus => right_eles.push(item_to_elem(item)),
-                TabBarItem::WindowButton(_) => {
-                    if self.config.integrated_title_button_alignment
-                        == IntegratedTitleButtonAlignment::Left
-                    {
+                TabBarItem::WindowButton(button) => {
+                    if left_buttons.contains(&button) {
                         left_eles.push(item_to_elem(item))
                     } else {
                         right_eles.push(item_to_elem(item))
@@ -436,8 +435,7 @@ impl crate::TermWindow {
             .config
             .window_decorations
             .contains(window::WindowDecorations::INTEGRATED_BUTTONS)
-            && (self.config.integrated_title_button_alignment
-                == IntegratedTitleButtonAlignment::Left
+            && (!left_buttons.is_empty()
                 || self.config.integrated_title_button_style
                     == IntegratedTitleButtonStyle::MacOsNative);
 

@@ -214,6 +214,94 @@ mod gnome {
     }
 }
 
+mod pantheon {
+    use super::*;
+
+    // elementary's window-close / -maximize / -unmaximize symbolic icons:
+    // a plain cross, and arrows out to (or in from) two corners
+
+    pub const CLOSE: &[Poly] = &[Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Frac(1, 10), BlockCoord::Frac(1, 10)),
+            PolyCommand::LineTo(BlockCoord::Frac(9, 10), BlockCoord::Frac(9, 10)),
+            PolyCommand::MoveTo(BlockCoord::Frac(9, 10), BlockCoord::Frac(1, 10)),
+            PolyCommand::LineTo(BlockCoord::Frac(1, 10), BlockCoord::Frac(9, 10)),
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::Outline,
+    }];
+
+    pub const HIDE: &[Poly] = &[Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Frac(1, 10), BlockCoord::Frac(8, 10)),
+            PolyCommand::LineTo(BlockCoord::Frac(9, 10), BlockCoord::Frac(8, 10)),
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::Outline,
+    }];
+
+    pub const MAXIMIZE: &[Poly] = &[Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Frac(1, 10), BlockCoord::Frac(9, 10)),
+            PolyCommand::LineTo(BlockCoord::Frac(9, 10), BlockCoord::Frac(1, 10)),
+            PolyCommand::MoveTo(BlockCoord::Frac(5, 10), BlockCoord::Frac(1, 10)),
+            PolyCommand::LineTo(BlockCoord::Frac(9, 10), BlockCoord::Frac(1, 10)),
+            PolyCommand::LineTo(BlockCoord::Frac(9, 10), BlockCoord::Frac(5, 10)),
+            PolyCommand::MoveTo(BlockCoord::Frac(1, 10), BlockCoord::Frac(5, 10)),
+            PolyCommand::LineTo(BlockCoord::Frac(1, 10), BlockCoord::Frac(9, 10)),
+            PolyCommand::LineTo(BlockCoord::Frac(5, 10), BlockCoord::Frac(9, 10)),
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::Outline,
+    }];
+
+    pub const RESTORE: &[Poly] = &[Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Frac(9, 10), BlockCoord::Frac(1, 10)),
+            PolyCommand::LineTo(BlockCoord::Frac(6, 10), BlockCoord::Frac(4, 10)),
+            PolyCommand::MoveTo(BlockCoord::Frac(6, 10), BlockCoord::Frac(1, 10)),
+            PolyCommand::LineTo(BlockCoord::Frac(6, 10), BlockCoord::Frac(4, 10)),
+            PolyCommand::LineTo(BlockCoord::Frac(9, 10), BlockCoord::Frac(4, 10)),
+            PolyCommand::MoveTo(BlockCoord::Frac(1, 10), BlockCoord::Frac(9, 10)),
+            PolyCommand::LineTo(BlockCoord::Frac(4, 10), BlockCoord::Frac(6, 10)),
+            PolyCommand::MoveTo(BlockCoord::Frac(1, 10), BlockCoord::Frac(6, 10)),
+            PolyCommand::LineTo(BlockCoord::Frac(4, 10), BlockCoord::Frac(6, 10)),
+            PolyCommand::LineTo(BlockCoord::Frac(4, 10), BlockCoord::Frac(9, 10)),
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::Outline,
+    }];
+
+    pub fn sized_poly(poly: &'static [Poly]) -> SizedPoly {
+        let size = Dimension::Points(9.);
+        SizedPoly {
+            poly,
+            width: size,
+            height: size,
+        }
+    }
+
+    pub fn window_button_colors(
+        background_lightness: f64,
+        foreground: config::IntegratedTitleButtonColor,
+        _window_button: IntegratedTitleButton,
+    ) -> WindowButtonColors {
+        let foreground = auto_button_color(background_lightness, foreground);
+        WindowButtonColors {
+            colors: ElementColors {
+                border: BorderColor::new(LinearRgba::TRANSPARENT),
+                bg: LinearRgba::TRANSPARENT.into(),
+                text: foreground.mul_alpha(0.8).into(),
+            },
+            hover_colors: ElementColors {
+                border: BorderColor::new(LinearRgba::TRANSPARENT),
+                bg: foreground.mul_alpha(0.08).into(),
+                text: foreground.into(),
+            },
+        }
+    }
+}
+
 pub fn window_button_element(
     window_button: IntegratedTitleButton,
     is_maximized: bool,
@@ -237,6 +325,10 @@ pub fn window_button_element(
                 use self::gnome::{CLOSE, HIDE, MAXIMIZE, RESTORE};
                 (CLOSE, HIDE, MAXIMIZE, RESTORE)
             }
+            Style::Pantheon => {
+                use self::pantheon::{CLOSE, HIDE, MAXIMIZE, RESTORE};
+                (CLOSE, HIDE, MAXIMIZE, RESTORE)
+            }
             Style::MacOsNative => unreachable!(),
         };
         let poly = match window_button {
@@ -254,6 +346,7 @@ pub fn window_button_element(
         match style {
             Style::Windows => self::windows::sized_poly(poly),
             Style::Gnome => self::gnome::sized_poly(poly),
+            Style::Pantheon => self::pantheon::sized_poly(poly),
             Style::MacOsNative => unreachable!(),
         }
     };
@@ -326,6 +419,18 @@ pub fn window_button_element(
                     bottom: dim,
                 })
         }
+        Style::Pantheon => {
+            let pad = Dimension::Points(10.);
+            element
+                .zindex(1)
+                .vertical_align(VerticalAlign::Middle)
+                .padding(BoxDimension {
+                    left: pad,
+                    right: pad,
+                    top: Dimension::Points(8.),
+                    bottom: Dimension::Points(8.),
+                })
+        }
         Style::MacOsNative => unreachable!(),
     };
 
@@ -339,6 +444,7 @@ pub fn window_button_element(
     let window_button_colors_fn = match style {
         Style::Windows => self::windows::window_button_colors,
         Style::Gnome => self::gnome::window_button_colors,
+        Style::Pantheon => self::pantheon::window_button_colors,
         Style::MacOsNative => unreachable!(),
     };
 

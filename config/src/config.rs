@@ -90,6 +90,15 @@ pub struct Config {
     #[dynamic(default)]
     pub integrated_title_button_alignment: IntegratedTitleButtonAlignment,
 
+    /// The desktop's own title-button layout, in GNOME's `button-layout`
+    /// form (`close:maximize`, `appmenu:minimize,maximize,close`): the
+    /// buttons left of the colon sit at the left end of the tab bar, the
+    /// rest at the right end; names other than close, minimize and
+    /// maximize are ignored. When set, it takes the place of
+    /// `integrated_title_buttons` and `integrated_title_button_alignment`.
+    #[dynamic(default)]
+    pub integrated_title_button_layout: Option<String>,
+
     #[dynamic(default)]
     pub integrated_title_button_style: IntegratedTitleButtonStyle,
 
@@ -934,6 +943,38 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The integrated title buttons at the left and at the right end of
+    /// the tab bar, in order.
+    pub fn integrated_title_button_sides(
+        &self,
+    ) -> (Vec<IntegratedTitleButton>, Vec<IntegratedTitleButton>) {
+        fn buttons(names: &str) -> Vec<IntegratedTitleButton> {
+            names
+                .split(',')
+                .filter_map(|name| match name.trim() {
+                    "close" => Some(IntegratedTitleButton::Close),
+                    "minimize" => Some(IntegratedTitleButton::Hide),
+                    "maximize" => Some(IntegratedTitleButton::Maximize),
+                    _ => None,
+                })
+                .collect()
+        }
+        match &self.integrated_title_button_layout {
+            Some(layout) => {
+                let (left, right) = layout.split_once(':').unwrap_or((layout, ""));
+                (buttons(left), buttons(right))
+            }
+            None => match self.integrated_title_button_alignment {
+                IntegratedTitleButtonAlignment::Left => {
+                    (self.integrated_title_buttons.clone(), vec![])
+                }
+                IntegratedTitleButtonAlignment::Right => {
+                    (vec![], self.integrated_title_buttons.clone())
+                }
+            },
+        }
+    }
+
     pub fn load() -> LoadedConfig {
         Self::load_with_overrides(&wezterm_dynamic::Value::default())
     }

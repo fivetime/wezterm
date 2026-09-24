@@ -2144,6 +2144,8 @@ pub enum IntegratedTitleButtonAlignment {
 pub enum IntegratedTitleButtonStyle {
     Windows,
     Gnome,
+    /// elementary OS: a plain cross and diagonal arrows, no backdrop
+    Pantheon,
     MacOsNative,
 }
 
@@ -2171,12 +2173,13 @@ impl FromDynamic for IntegratedTitleButtonStyle {
             let style = match string.as_str() {
                 "Windows" => Self::Windows,
                 "Gnome" => Self::Gnome,
+                "Pantheon" => Self::Pantheon,
                 "MacOsNative" if cfg!(target_os = "macos") => Self::MacOsNative,
                 _ => {
                     return Err(wezterm_dynamic::Error::InvalidVariantForType {
                         variant_name: string.to_string(),
                         type_name,
-                        possible: &["Windows", "Gnome", "MacOsNative"],
+                        possible: &["Windows", "Gnome", "Pantheon", "MacOsNative"],
                     });
                 }
             };
