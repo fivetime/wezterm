@@ -2305,12 +2305,9 @@ impl TermWindow {
     }
 
     /// The popup menu, where the mouse is (the window's middle when the
-    /// keyboard asked for it).
-    fn show_popup_menu(&mut self, args: &config::keyassignment::PopupMenu) {
-        let pane = match self.get_active_pane_no_overlay() {
-            Some(pane) => pane,
-            None => return,
-        };
+    /// keyboard asked for it), about `pane`: the pane the action was
+    /// performed for, which may be another tab's (a right click on a tab).
+    fn show_popup_menu(&mut self, pane: &Arc<dyn Pane>, args: &config::keyassignment::PopupMenu) {
         let at = match &self.current_mouse_event {
             Some(event) => (event.coords.x as f32, event.coords.y as f32),
             None => (
@@ -3190,7 +3187,7 @@ impl TermWindow {
             PromptInputLine(args) => self.show_prompt_input_line(args),
             InputSelector(args) => self.show_input_selector(args),
             Confirmation(args) => self.show_confirmation(args),
-            PopupMenu(args) => self.show_popup_menu(args),
+            PopupMenu(args) => self.show_popup_menu(pane, args),
         };
         Ok(PerformAssignmentResult::Handled)
     }

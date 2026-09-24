@@ -464,6 +464,59 @@ impl super::TermWindow {
         .detach();
     }
 
+    /// A right click on the tab at `tab_idx`: the `tab-right-click` event,
+    /// with that tab's active pane and its index; unless a handler returns
+    /// false, the tab navigator as before.
+    fn do_tab_right_click(&mut self, tab_idx: usize) {
+        let pane = {
+            let mux = Mux::get();
+            let Some(window) = mux.get_window(self.mux_window_id) else {
+                return;
+            };
+            let Some(pane) = window
+                .get_tab_at_idx(tab_idx)
+                .and_then(|tab| tab.get_active_pane())
+            else {
+                return;
+            };
+            pane
+        };
+
+        async fn dispatch_tab_right_click(
+            lua: Option<Rc<mlua::Lua>>,
+            window: GuiWin,
+            pane: MuxPane,
+            tab_idx: usize,
+        ) -> anyhow::Result<()> {
+            let default_action = match lua {
+                Some(lua) => {
+                    let args = lua.pack_multi((window.clone(), pane, tab_idx))?;
+                    config::lua::emit_event(&lua, ("tab-right-click".to_string(), args))
+                        .await
+                        .map_err(|e| {
+                            log::error!("while processing tab-right-click event: {:#}", e);
+                            e
+                        })?
+                }
+                None => true,
+            };
+            if default_action {
+                window.window.notify(TermWindowNotif::PerformAssignment {
+                    pane_id: pane.0,
+                    assignment: KeyAssignment::ShowTabNavigator,
+                    tx: None,
+                });
+            }
+            Ok(())
+        }
+        let window = GuiWin::new(self);
+        let pane = MuxPane(pane.pane_id());
+        promise::spawn::spawn(config::with_lua_config_on_main_thread(move |lua| {
+            dispatch_tab_right_click(lua, window, pane, tab_idx)
+        }))
+        .detach();
+    }
+
     pub fn mouse_event_tab_bar(
         &mut self,
         item: TabBarItem,
@@ -534,8 +587,8 @@ impl super::TermWindow {
                 | TabBarItem::WindowButton(_) => {}
             },
             WMEK::Press(MousePress::Right) => match item {
-                TabBarItem::Tab { .. } => {
-                    self.show_tab_navigator();
+                TabBarItem::Tab { tab_idx, .. } => {
+                    self.do_tab_right_click(tab_idx);
                 }
                 TabBarItem::NewTabButton { .. } => {
                     self.do_new_tab_button_click(MousePress::Right);
