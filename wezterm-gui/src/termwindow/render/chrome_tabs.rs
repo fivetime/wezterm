@@ -20,7 +20,7 @@ use window::RectF;
 /// where they are held against Chromium's numbers without a window.
 pub use chrome_strip::{
     hover_at, hover_fill, max_contrast, separator_opacity, stroke, Hover, CLOSE_HIGHLIGHT_RADIUS,
-    FOOT, GAP, HIGHLIGHT_OPACITY as HIGHLIGHT, INSET, SEPARATOR_RADIUS, TOP_RADIUS, WHITE,
+    FOOT, GAP, HIGHLIGHT_OPACITY as HIGHLIGHT, INSET, SEPARATOR_RADIUS, TOP_RADIUS,
 };
 
 /// The tabs in a computed tab bar: their bodies, whether active, left to

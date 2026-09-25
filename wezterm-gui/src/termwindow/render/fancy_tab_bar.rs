@@ -258,66 +258,71 @@ impl crate::TermWindow {
                     }))
                 }
                 TabBarItem::NewTabButton if chrome => {
+                    // Chrome's new-tab button, built as the tab search
+                    // button is: 28 round, 6 down the strip (its border
+                    // insets of 6 above and 7 below centre it in the 40
+                    // above the toolbar's line), the plus 10 across in
+                    // the 16 icon (kAddOldIcon: 3 to 13); under the
+                    // pointer the colour contrasting most with the strip
+                    // at 0.16 (kColorTabStripControlButtonInkDrop:
+                    // GetColorWithMaxContrast of the inactive tab's
+                    // background, the strip's with a system theme)
                     let fg = new_tab.fg_color.to_linear();
+                    let (button, icon) = (layout.new_tab, layout.new_tab_icon);
+                    let glyph_inset = dip_px(3.);
+                    let plus = chrome_strip::Rect::new(
+                        icon.x + glyph_inset,
+                        icon.y + glyph_inset,
+                        icon.w - 2. * glyph_inset,
+                        icon.h - 2. * glyph_inset,
+                    );
+                    let hover = chrome_tabs::max_contrast(frame_colour)
+                        .to_linear()
+                        .mul_alpha(chrome_tabs::HIGHLIGHT);
+                    let before = layout
+                        .tabs
+                        .iter()
+                        .rfind(|t| t.visible)
+                        .map_or(0., |t| t.body.right())
+                        + chrome_strip::dip(chrome_tabs::GAP / 2., scale);
+                    let pad_x = ((button.w - plus.w) / 2. - 1.).max(0.).floor();
+                    let pad_top = (plus.y - button.y - 1.).max(0.).round();
+                    let pad_bottom = (button.h - 2. - plus.h - pad_top).max(0.);
                     Element::new(
                         &font,
                         ElementContent::Poly {
                             line_width: metrics.underline_height.max(2),
                             poly: SizedPoly {
                                 poly: PLUS_BUTTON,
-                                width: dip(10.),
-                                height: dip(10.),
+                                width: Dimension::Pixels(plus.w),
+                                height: Dimension::Pixels(plus.h),
                             },
                         },
                     )
-                    // 6 down the strip, as Chrome's (its border insets of
-                    // 6 above and 7 below centre the 28 in the 40 above
-                    // the toolbar's line): from the top, not centred
-                    // again in the strip with the margin
                     .vertical_align(VerticalAlign::Top)
                     .item_type(UIItemType::TabBar(item.item.clone()))
                     .margin(BoxDimension {
-                        left: Dimension::Pixels(
-                            layout.new_tab.x
-                                - layout
-                                    .tabs
-                                    .iter()
-                                    .rfind(|t| t.visible)
-                                    .map_or(0., |t| t.body.right())
-                                - chrome_strip::dip(chrome_tabs::GAP / 2., scale),
-                        ),
+                        left: Dimension::Pixels((button.x - before).max(0.)),
                         right: dip(0.),
-                        top: Dimension::Pixels(layout.new_tab.y),
-                        bottom: Dimension::Pixels(
-                            layout.height - layout.new_tab.y - layout.new_tab.h,
-                        ),
+                        top: Dimension::Pixels(button.y),
+                        bottom: Dimension::Pixels(layout.height - button.y - button.h),
                     })
-                    .padding(BoxDimension::new(Dimension::Pixels(
-                        ((layout.new_tab.w - chrome_strip::dip(10., scale)) / 2. - 1.)
-                            .max(0.)
-                            .floor(),
-                    )))
+                    .padding(BoxDimension {
+                        left: Dimension::Pixels(pad_x),
+                        right: Dimension::Pixels(pad_x),
+                        top: Dimension::Pixels(pad_top),
+                        bottom: Dimension::Pixels(pad_bottom),
+                    })
                     .border(BoxDimension::new(Dimension::Pixels(1.)))
-                    .border_corners(Some(chrome_circle(layout.new_tab.w / 2.)))
+                    .border_corners(Some(chrome_circle(button.w / 2.)))
                     .colors(ElementColors {
                         border: BorderColor::new(window::color::LinearRgba::TRANSPARENT),
                         bg: window::color::LinearRgba::TRANSPARENT.into(),
                         text: fg.into(),
                     })
-                    // under the pointer: the colour contrasting most with
-                    // the strip at 0.16 (kColorTabStripControlButtonInkDrop:
-                    // GetColorWithMaxContrast of the inactive tab's
-                    // background, the strip's colour with a system theme)
                     .hover_colors(Some(ElementColors {
-                        border: BorderColor::new(
-                            chrome_tabs::max_contrast(frame_colour)
-                                .to_linear()
-                                .mul_alpha(chrome_tabs::HIGHLIGHT),
-                        ),
-                        bg: chrome_tabs::max_contrast(frame_colour)
-                            .to_linear()
-                            .mul_alpha(chrome_tabs::HIGHLIGHT)
-                            .into(),
+                        border: BorderColor::new(hover),
+                        bg: hover.into(),
                         text: fg.into(),
                     }))
                 }
