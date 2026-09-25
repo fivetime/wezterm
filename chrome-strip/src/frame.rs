@@ -345,7 +345,7 @@ mod tests {
         assert_eq!(alpha(&p, 128, 128), 0);
         // just outside the window's left edge: the border line and shadow
         let border = alpha(&p, 63, 128);
-        assert!(border >= 0x26 && border < 0x90, "{border}");
+        assert!((0x26..0x90).contains(&border), "{border}");
         // the shadow fades outwards, deeper below than above
         let (near, far) = (alpha(&p, 40, 128), alpha(&p, 4, 128));
         assert!(near > far && far <= 2, "near {near} far {far}");

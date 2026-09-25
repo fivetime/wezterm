@@ -75,6 +75,11 @@ pub const NEW_TAB_BUTTON: f32 = 28.;
 pub const NEW_TAB_ICON: f32 = 16.;
 pub const NEW_TAB_AFTER_TABS: f32 = 6.;
 pub const NEW_TAB_ROOM: f32 = NEW_TAB_BUTTON + NEW_TAB_AFTER_TABS;
+/// The room kept free after the new-tab button, before the caption
+/// buttons, for grabbing the frame by however full the strip is
+/// (HorizontalTabStripRegionView's FrameGrabHandle: 42 x 0 preferred,
+/// never narrower).
+pub const GRAB_HANDLE: f32 = 42.;
 /// The strip starts at the client edge, or past the leading caption
 /// buttons by their margin over this much (the region's leading margin).
 pub const LEADING_MARGIN: f32 = 12.;
@@ -420,8 +425,9 @@ impl Layout {
             .unwrap_or(0.)
             .max(inputs.drawn_buttons);
         let region_right = width - trailing;
-        // the tabs share the region less the new-tab button's room
-        let available = (region_right - region_left - NEW_TAB_ROOM).max(0.);
+        // the tabs share the region less the new-tab button's room and
+        // the grab handle's
+        let available = (region_right - region_left - NEW_TAB_ROOM - GRAB_HANDLE).max(0.);
         let widths = tab_widths(available, inputs.tabs, inputs.active);
         let tab_top = d(TAB_TOP);
         let tab_height = d(HIGHLIGHT_HEIGHT);
@@ -1040,7 +1046,7 @@ mod tests {
         // an inactive tab of 108 gets its close button back, 107 not
         let strip_for = |w: f32| Inputs {
             tabs: 8,
-            width_px: w * 8. - 7. * 18. + 34.,
+            width_px: w * 8. - 7. * 18. + 34. + 42.,
             active: 0,
             ..Inputs::default()
         };
@@ -1124,14 +1130,14 @@ mod tests {
             l.tabs.iter().map(|t| t.bounds_dip).collect::<Vec<_>>()
         );
         assert_eq!(
-            l.tabs[4].bounds_dip.right() + 34.,
+            l.tabs[4].bounds_dip.right() + 34. + 42.,
             1000. - trailing,
-            "the new-tab button's 34 kept"
+            "the new-tab button's 34 kept, and the grab handle's 42"
         );
         assert_eq!(
             l.new_tab.right(),
-            1000. - trailing - 12.,
-            "6 past the last tab, 12 short of the buttons' region"
+            1000. - trailing - 12. - 42.,
+            "6 past the last tab, the grab handle short of the buttons' region"
         );
     }
 

@@ -171,7 +171,11 @@ impl crate::TermWindow {
                             },
                         },
                     )
-                    .vertical_align(VerticalAlign::Middle)
+                    // 6 down the strip, as Chrome's (its border insets of
+                    // 6 above and 7 below centre the 28 in the 40 above
+                    // the toolbar's line): from the top, not centred
+                    // again in the strip with the margin
+                    .vertical_align(VerticalAlign::Top)
                     .item_type(UIItemType::TabBar(item.item.clone()))
                     .margin(BoxDimension {
                         left: Dimension::Pixels(
@@ -181,7 +185,9 @@ impl crate::TermWindow {
                         ),
                         right: dip(0.),
                         top: Dimension::Pixels(layout.new_tab.y),
-                        bottom: dip(0.),
+                        bottom: Dimension::Pixels(
+                            layout.height - layout.new_tab.y - layout.new_tab.h,
+                        ),
                     })
                     .padding(BoxDimension::new(Dimension::Pixels(
                         ((layout.new_tab.w - chrome_strip::dip(10., scale)) / 2. - 1.)
@@ -946,7 +952,7 @@ impl crate::TermWindow {
         if self.window_state.contains(window::WindowState::SOLID_EDGE) {
             let line = chrome_strip::frame::solid_border(frame);
             let top = euclid::rect(strip.min_x(), strip.min_y(), strip.width(), 1.);
-            let over = chrome_strip::blend(frame, line, line.3);
+            let over = chrome_strip::blend(line, frame, line.3);
             self.filled_rectangle(&mut layers, 0, top, lin(over))?;
         }
 

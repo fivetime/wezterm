@@ -33,8 +33,10 @@ widths and the DIP left over to the first tabs); `tab.top_corner_radius`
 `tab.contents_insets` 20; `region.leading_margin_param` 12 and
 `frame.exclusions_linux` (the strip past leading buttons by the larger
 of 12 and their margin; the trailing buttons' bounds plus the caption
-margin); `ntb.position` (6 past the last tab) and `ntb.button_size` 28
-with its 16 icon and 14 radius; `px.scale_and_align_bounds` for the
+margin); `ntb.position` (6 past the last tab, 6 down the strip) and
+`ntb.button_size` 28 with its 16 icon and 14 radius; `region.grab_handle`
+(42 DIP kept free after the new-tab button, before the caption buttons,
+however full the strip: room to drag the window by); `px.scale_and_align_bounds` for the
 body's pixel edges; the hit test's 3-DIP reach into the separators and
 its rise to the top when maximized.
 
