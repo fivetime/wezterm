@@ -58,6 +58,38 @@ struct CachedProcInfo {
     foreground: LocalProcessInfo,
 }
 
+impl CachedProcInfo {
+    /// The tree under `root`, and its foreground process: the youngest
+    /// of the tree (on Windows, among those with a console).
+    fn from_root(root: LocalProcessInfo) -> Self {
+        let mut youngest = &root;
+
+        fn find_youngest<'a>(proc: &'a LocalProcessInfo, youngest: &mut &'a LocalProcessInfo) {
+            if proc.start_time >= youngest.start_time {
+                *youngest = proc;
+            }
+
+            for child in proc.children.values() {
+                #[cfg(windows)]
+                if child.console == 0 {
+                    continue;
+                }
+                find_youngest(child, youngest);
+            }
+        }
+
+        find_youngest(&root, &mut youngest);
+        let mut foreground = youngest.clone();
+        foreground.children.clear();
+
+        Self {
+            root,
+            foreground,
+            updated: Instant::now(),
+        }
+    }
+}
+
 /// This is a bit horrible; it can take 700us to tcgetpgrp, so if we have
 /// 10 tabs open and run the mouse over them, hovering them each in turn,
 /// we can spend 7ms per evaluation of the tab bar state on fetching those
@@ -129,7 +161,10 @@ pub struct LocalPane {
     writer: Mutex<Box<dyn Write + Send>>,
     domain_id: DomainId,
     tmux_domain: Mutex<Option<Arc<TmuxDomainState>>>,
-    proc_list: Mutex<Option<CachedProcInfo>>,
+    proc_list: Arc<Mutex<Option<CachedProcInfo>>>,
+    /// A refresh of `proc_list` running on its own thread (see
+    /// `divine_process_list`).
+    proc_list_refreshing: Arc<std::sync::atomic::AtomicBool>,
     #[cfg(unix)]
     leader: Arc<Mutex<Option<CachedLeaderInfo>>>,
     command_description: String,
@@ -1033,7 +1068,8 @@ impl LocalPane {
             writer: Mutex::new(writer),
             domain_id,
             tmux_domain: Mutex::new(None),
-            proc_list: Mutex::new(None),
+            proc_list: Arc::new(Mutex::new(None)),
+            proc_list_refreshing: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             #[cfg(unix)]
             leader: Arc::new(Mutex::new(None)),
             command_description,
@@ -1099,42 +1135,38 @@ impl LocalPane {
                     .unwrap_or(true);
 
             if expired {
-                log::trace!("CachedProcInfo expired, refresh");
-                let root = LocalProcessInfo::with_root_pid(*pid)?;
-
-                // Windows doesn't have any job control or session concept,
-                // so we infer that the equivalent to the process group
-                // leader is the most recently spawned program running
-                // in the console
-                let mut youngest = &root;
-
-                fn find_youngest<'a>(
-                    proc: &'a LocalProcessInfo,
-                    youngest: &mut &'a LocalProcessInfo,
-                ) {
-                    if proc.start_time >= youngest.start_time {
-                        *youngest = proc;
-                    }
-
-                    for child in proc.children.values() {
-                        #[cfg(windows)]
-                        if child.console == 0 {
-                            continue;
+                if policy == CachePolicy::AllowStale && proc_list.is_some() {
+                    // Stale will do: hand back what we have and refresh it
+                    // on a thread of its own. Walking the process tree
+                    // enumerates every process on the system (Windows'
+                    // Toolhelp snapshot, /proc on Linux), and a window
+                    // with many panes asks for every pane's whenever its
+                    // titles are refreshed: done here, on the GUI thread,
+                    // that stalled the whole window.
+                    use std::sync::atomic::Ordering;
+                    if !self.proc_list_refreshing.swap(true, Ordering::AcqRel) {
+                        let pid = *pid;
+                        let cache = Arc::clone(&self.proc_list);
+                        let refreshing = Arc::clone(&self.proc_list_refreshing);
+                        let spawned =
+                            std::thread::Builder::new()
+                                .name("procinfo".into())
+                                .spawn(move || {
+                                    if let Some(root) = LocalProcessInfo::with_root_pid(pid) {
+                                        *cache.lock() = Some(CachedProcInfo::from_root(root));
+                                    }
+                                    refreshing.store(false, Ordering::Release);
+                                });
+                        if spawned.is_err() {
+                            self.proc_list_refreshing.store(false, Ordering::Release);
                         }
-                        find_youngest(child, youngest);
                     }
+                } else {
+                    log::trace!("CachedProcInfo expired, refresh");
+                    let root = LocalProcessInfo::with_root_pid(*pid)?;
+                    proc_list.replace(CachedProcInfo::from_root(root));
+                    log::trace!("CachedProcInfo updated");
                 }
-
-                find_youngest(&root, &mut youngest);
-                let mut foreground = youngest.clone();
-                foreground.children.clear();
-
-                proc_list.replace(CachedProcInfo {
-                    root,
-                    foreground,
-                    updated: Instant::now(),
-                });
-                log::trace!("CachedProcInfo updated");
             }
 
             return Some(MutexGuard::map(proc_list, |info| info.as_mut().unwrap()));

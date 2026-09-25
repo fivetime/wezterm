@@ -11,6 +11,29 @@ use std::time::{Duration, Instant};
 use tabout::{tabulate_output, Alignment, Column};
 
 static ENABLE_STAT_PRINT: AtomicBool = AtomicBool::new(true);
+
+/// Times a scope into the histogram `name` (its duration) and counts it
+/// in `<name>.rate`, for `periodic_stat_logging`.
+pub struct Timed {
+    name: &'static str,
+    start: Instant,
+}
+
+impl Timed {
+    pub fn new(name: &'static str) -> Self {
+        Self {
+            name,
+            start: Instant::now(),
+        }
+    }
+}
+
+impl Drop for Timed {
+    fn drop(&mut self) {
+        metrics::histogram!(self.name).record(self.start.elapsed());
+        metrics::histogram!(format!("{}.rate", self.name)).record(1.);
+    }
+}
 lazy_static::lazy_static! {
     static ref INNER: Arc<Mutex<Inner>> = make_inner();
 }

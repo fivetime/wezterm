@@ -88,6 +88,7 @@ impl crate::TermWindow {
     }
 
     pub fn build_fancy_tab_bar(&self, palette: &ColorPalette) -> anyhow::Result<ComputedElement> {
+        let _timer = crate::stats::Timed::new("fancy_tab_bar.build");
         let tab_bar_height = self.tab_bar_pixel_height()?;
         let font = self.fonts.title_font()?;
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
@@ -1002,6 +1003,7 @@ impl crate::TermWindow {
 /// it would not stand out, stroked.
 impl crate::TermWindow {
     fn paint_chrome_tabs(&self, computed: &ComputedElement) -> anyhow::Result<()> {
+        let _timer = crate::stats::Timed::new("chrome_tabs.paint");
         let scale = self.dimensions.dpi as f32 / 96.;
         let focused = self.focused.is_some();
         let frame: config::SrgbaTuple = if focused {

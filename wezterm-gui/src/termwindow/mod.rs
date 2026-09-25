@@ -1982,6 +1982,7 @@ impl TermWindow {
     }
 
     fn update_title_impl(&mut self) {
+        let _timer = crate::stats::Timed::new("gui.update_title");
         let mux = Mux::get();
         let window = match mux.get_window(self.mux_window_id) {
             Some(window) => window,

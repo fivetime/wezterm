@@ -11,6 +11,8 @@ use ntapi::ntwow64::RTL_USER_PROCESS_PARAMETERS32;
 use std::ffi::OsString;
 use std::mem::MaybeUninit;
 use std::os::windows::ffi::OsStringExt;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use winapi::shared::minwindef::{DWORD, FILETIME, LPVOID, MAX_PATH};
 use winapi::shared::ntdef::{FALSE, NT_SUCCESS};
 use winapi::um::handleapi::CloseHandle;
@@ -41,13 +43,31 @@ impl Snapshot {
         }
     }
 
-    pub fn entries() -> Vec<PROCESSENTRY32W> {
-        match Self::new() {
+    /// The system's process list, taken at most once every
+    /// `SNAPSHOT_TTL` and shared: a Toolhelp snapshot walks every
+    /// process on the system, and a window with many panes asks for one
+    /// per pane whenever its titles are refreshed, so the snapshots, not
+    /// the per-pane reads, were the cost that grew with the tab count
+    /// (and with the processes the tabs themselves add).
+    pub fn entries() -> Arc<Vec<PROCESSENTRY32W>> {
+        static CACHED: Mutex<Option<(Instant, Arc<Vec<PROCESSENTRY32W>>)>> = Mutex::new(None);
+        let mut cached = CACHED.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((taken, entries)) = cached.as_ref() {
+            if taken.elapsed() < SNAPSHOT_TTL {
+                return Arc::clone(entries);
+            }
+        }
+        let entries: Arc<Vec<PROCESSENTRY32W>> = Arc::new(match Self::new() {
             Some(snapshot) => snapshot.iter().collect(),
             None => vec![],
-        }
+        });
+        *cached = Some((Instant::now(), Arc::clone(&entries)));
+        entries
     }
 }
+
+/// How long one process snapshot serves every pane.
+const SNAPSHOT_TTL: Duration = Duration::from_millis(250);
 
 impl Drop for Snapshot {
     fn drop(&mut self) {
