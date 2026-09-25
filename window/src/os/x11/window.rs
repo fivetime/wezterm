@@ -334,10 +334,11 @@ impl XWindowInner {
         );
         self.insets = insets;
         let conn = self.conn();
-        // where the window really is, for the window manager (Chrome's
-        // solid frame is part of the window)
+        // where the window really is, for the window manager (Chrome
+        // sets it on mapping whatever the manager knows, the solid
+        // frame's 4 DIP included: X11Window::UpdateDecorationInsets)
         let extents = conn.atom_gtk_frame_extents;
-        if insets.is_empty() || !edge.is_extents() {
+        if insets.is_empty() {
             conn.send_request_no_reply_log(&xcb::x::DeleteProperty {
                 window: self.window_id,
                 property: extents,

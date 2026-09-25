@@ -107,7 +107,13 @@ frame's colour 4 DIP either side and below (`kFrameBorderThickness`),
 none above, the whole window one round-cornered outline with a 1-px
 interior line at 0x26 in black or white (`PickContrastingColor`), the
 line's top run across the strip's first row, the content's top 4 DIP
-resizing (`kResizeTopBorderThickness`), no `_GTK_FRAME_EXTENTS`. The
+resizing (`kResizeTopBorderThickness`); `_GTK_FRAME_EXTENTS` set to the
+4-DIP borders whatever the window manager knows, as
+`X11Window::UpdateDecorationInsets` sets it on mapping (seen on Chrome's
+window on deepin: 4, 4, 0, 4). The content's top corners are cut square
+(8 x 8) and show the picture there: the frame's colour, the line's top
+run and the outline's arc, as Chrome's frame view paints under its tab
+strip's clear corners. The
 X11 window picks the variant from the same facts Chrome does
 (`_GTK_FRAME_EXTENTS` in `_NET_SUPPORTED`, not Xfwm4; `_NET_WM_CM_S*`
 owned); Wayland always has the shadow.

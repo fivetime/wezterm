@@ -88,13 +88,6 @@ impl Edge {
         })
     }
 
-    /// Whether the margins are outside the window as the window manager
-    /// should see it (`_GTK_FRAME_EXTENTS`): a shadow. Chrome's solid
-    /// frame is part of the window.
-    pub fn is_extents(&self) -> bool {
-        !self.is_solid()
-    }
-
     /// Chrome's solid frame: the border line's top run crosses the
     /// content's first row, and the top 4 DIP of the content resize.
     pub fn is_solid(&self) -> bool {
@@ -254,9 +247,10 @@ impl Edge {
         header: [f32; 4],
     ) -> Vec<u8> {
         let radius = self.radius(scale);
+        let header_under = !self.is_solid();
         let (pf, pu) = self.pictures(scale, header);
         let picture = if focused { pf } else { pu };
-        let geometry = Geometry::new(outer, insets, picture.width(), radius);
+        let geometry = Geometry::new(outer, insets, picture.width(), radius, header_under);
         let (inner_w, inner_h) = geometry.inner();
         let (l, t) = (insets.left, insets.top);
         let mut data = Vec::with_capacity(usize::from(outer.0) * usize::from(outer.1) * 4);
@@ -288,9 +282,10 @@ impl Edge {
         header: [f32; 4],
     ) -> Vec<(u16, u16, u16, u16, Vec<u8>)> {
         let radius = self.radius(scale);
+        let header_under = !self.is_solid();
         let (pf, pu) = self.pictures(scale, header);
         let picture = if focused { pf } else { pu };
-        let geometry = Geometry::new(outer, insets, picture.width(), radius);
+        let geometry = Geometry::new(outer, insets, picture.width(), radius, header_under);
         let (w, h) = outer;
         let (inner_w, inner_h) = geometry.inner();
         if inner_w == 0 || inner_h == 0 {
@@ -337,15 +332,27 @@ struct Geometry {
     /// `2 * slice`.
     slice: i32,
     radius: u16,
+    /// Whether the header's colour goes under the picture in the
+    /// content's round corners (a picture drawn around the content:
+    /// the theme's, Chrome's shadow); Chrome's solid frame paints the
+    /// corners itself.
+    header_under: bool,
 }
 
 impl Geometry {
-    fn new(outer: (u16, u16), insets: Insets, picture_side: u32, radius: u16) -> Self {
+    fn new(
+        outer: (u16, u16),
+        insets: Insets,
+        picture_side: u32,
+        radius: u16,
+        header_under: bool,
+    ) -> Self {
         Self {
             insets,
             outer,
             slice: (picture_side / 4) as i32,
             radius,
+            header_under,
         }
     }
 
@@ -391,7 +398,11 @@ impl Geometry {
             f32::from(p[0]) / 255. * a,
             a,
         ];
-        let cover = self.corner_cover(dx, dy, i32::from(inner_w));
+        let cover = if self.header_under {
+            self.corner_cover(dx, dy, i32::from(inner_w))
+        } else {
+            0.
+        };
         if cover > 0. {
             // the header's colour under the drawing, as far as the round
             // corner covers the pixel
@@ -476,7 +487,7 @@ mod tests {
     #[test]
     fn nine_slices() {
         // a 256 picture: slice 64, the window at 64..192
-        let g = Geometry::new((440, 340), insets(), 256, 8);
+        let g = Geometry::new((440, 340), insets(), 256, 8, true);
         assert_eq!(g.inner(), (400, 300));
         assert_eq!(
             g.source(-20, 400),
@@ -498,7 +509,7 @@ mod tests {
 
     #[test]
     fn round_corners() {
-        let g = Geometry::new((440, 340), insets(), 256, 8);
+        let g = Geometry::new((440, 340), insets(), 256, 8, true);
         assert_eq!(g.corner_cover(0, 0, 400), 0., "the very corner is cut");
         assert_eq!(g.corner_cover(7, 7, 400), 1., "inside the round");
         assert_eq!(g.corner_cover(399, 0, 400), 0., "the right corner too");

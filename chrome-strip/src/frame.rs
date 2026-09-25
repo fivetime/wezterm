@@ -269,11 +269,26 @@ pub fn picture(
     } else {
         // solid: the frame's colour 4 DIP either side and below, the
         // whole (borders and content) one round-cornered shape, the
-        // contrasting line a pixel inside its outline; the content's own
-        // place clear
+        // contrasting line a pixel inside its outline. The content's own
+        // place is clear as a plain rectangle: its top corners, cut
+        // square from the content (the fork's shape), show this picture
+        // — the frame's colour, the line's top run and the outline's arc
+        // — where Chrome's frame view paints the same under its tab
+        // strip's clear corners.
         let b = (SOLID_BORDER * scale).round();
         let frame_rgb = (frame.0, frame.1, frame.2);
         let line = solid_border(frame);
+        let mut content = rounded_rect(side, x0, y0, x1, y1, 0.);
+        // less its top corner squares, `r` a side, which the content's
+        // shape leaves to this picture
+        let sq = r.ceil() as usize;
+        for y in y0 as usize..(y0 as usize + sq).min(side) {
+            for x in (x0 as usize..(x0 as usize + sq).min(side))
+                .chain((x1 as usize).saturating_sub(sq)..x1 as usize)
+            {
+                content[y * side + x] = 0.;
+            }
+        }
         let outer = rounded_rect(side, x0 - b, y0, x1 + b, y1 + b, r);
         let inner = rounded_rect(
             side,
@@ -284,9 +299,9 @@ pub fn picture(
             (r - 1.).max(0.),
         );
         for i in 0..side * side {
-            let a = outer[i] * (1. - window[i]);
+            let a = outer[i] * (1. - content[i]);
             over(&mut rgba, i, frame_rgb, a);
-            let ring = (outer[i] - inner[i]).max(0.) * (1. - window[i]);
+            let ring = (outer[i] - inner[i]).max(0.) * (1. - content[i]);
             over(&mut rgba, i, (line.0, line.1, line.2), ring * line.3);
         }
     }
@@ -385,6 +400,36 @@ mod tests {
         // outside its arc clear, the arc's foot at the content's top
         assert_eq!(alpha(&p, 60, 64), 0);
         assert!(alpha(&p, 66, 64) > 0);
+        // the content's corner square (its top 8 rows, 8 in from its edge)
+        // carries the frame, the line's top run and the arc, for the
+        // content is cut square there: at (70, 64) the line, at (70, 66)
+        // the frame's colour, at (72, 64) the line still
+        let px = |x: u32, y: u32| &p.rgba[((y * 256 + x) * 4) as usize..][..4];
+        assert_eq!(px(70, 64)[3], 255);
+        assert!(
+            px(70, 64)[0] < px(70, 66)[0],
+            "line {:?} over frame {:?}",
+            px(70, 64),
+            px(70, 66)
+        );
+        assert_eq!(px(70, 66)[3], 255);
+        assert!(px(70, 66)[0] >= 230);
+        assert!(
+            px(71, 64)[0] < 230,
+            "the line runs to the square's end: {:?}",
+            px(71, 64)
+        );
+        assert_eq!(
+            px(72, 64)[3],
+            0,
+            "past the square, the content draws its own row"
+        );
+        assert_eq!(px(72, 72)[3], 0, "the content's own place");
+        assert_eq!(
+            px(66, 70)[3],
+            255,
+            "the square's inside is the frame's colour"
+        );
         // square corners without compositing
         let q = picture(64., 1., true, false, false, frame);
         assert_eq!(alpha(&q, 60, 64), 255);
