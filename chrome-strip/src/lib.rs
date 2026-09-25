@@ -835,6 +835,30 @@ pub fn contrast(a: SrgbaTuple, b: SrgbaTuple) -> f32 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
+/// The contrast a tab's text reaches against its tab, by the tab's and
+/// the window's state (tab_strip_color_mixer.cc kTabFgToContrastMap):
+/// active tab in a focused window 10.46, inactive 7.98; in an unfocused
+/// window 5.0 and 4.5.
+pub fn title_contrast(active: bool, focused: bool) -> f32 {
+    match (active, focused) {
+        (true, true) => 10.46,
+        (true, false) => 5.0,
+        (false, true) => 7.98,
+        (false, false) => 4.5,
+    }
+}
+
+/// A tab's text colour: the theme's `fg` — in an unfocused window
+/// blended 75 % towards the tab first, as Chrome derives the inactive
+/// window's colours — moved towards whichever of black and white
+/// contrasts most with the tab until it reaches Chrome's ratio for the
+/// state (BlendForMinContrast(fg, bg, GetColorWithMaxContrast(bg),
+/// ratio)), so a theme's text is never lost on its own tab.
+pub fn title_colour(fg: SrgbaTuple, bg: SrgbaTuple, active: bool, focused: bool) -> SrgbaTuple {
+    let base = if focused { fg } else { blend(fg, bg, 0.75) };
+    min_contrast(base, bg, max_contrast(bg), title_contrast(active, focused)).unwrap_or(base)
+}
+
 /// `a` over `b` at `alpha` in sRGB (color_utils::AlphaBlend), opaque.
 pub fn blend(a: SrgbaTuple, b: SrgbaTuple, alpha: f32) -> SrgbaTuple {
     let m = |x: f32, y: f32| x * alpha + y * (1. - alpha);
@@ -1371,6 +1395,29 @@ mod tests {
             "0.75 * (1 - 0.5^2)"
         );
         assert_eq!(back.value(1400.), 0.);
+    }
+
+    #[test]
+    fn a_title_reads_on_its_tab() {
+        let black = SrgbaTuple(0., 0., 0., 1.);
+        let near_black = SrgbaTuple(0.05, 0.05, 0.05, 1.);
+        // black text a theme gave on a near-black tab: raised towards
+        // white until it contrasts 10.46 (active, focused)
+        let c = title_colour(black, near_black, true, true);
+        assert!(contrast(c, near_black) >= 10.46 - 0.05, "{c:?}");
+        assert!(c.0 > 0.6, "moved towards white: {c:?}");
+        // text that already contrasts enough is left alone
+        assert_eq!(title_colour(WHITE, near_black, true, true), WHITE);
+        // an inactive tab asks less (7.98), an unfocused window less still
+        let d = title_colour(black, near_black, false, true);
+        assert!(contrast(d, near_black) >= 7.98 - 0.05 && d.0 <= c.0);
+        let e = title_colour(WHITE, near_black, false, false);
+        assert!(
+            contrast(e, near_black) >= 4.5 - 0.05 && e.0 < 1.,
+            "dimmed 75 % towards the tab: {e:?}"
+        );
+        assert_eq!(title_contrast(true, true), 10.46);
+        assert_eq!(title_contrast(false, false), 4.5);
     }
 
     #[test]

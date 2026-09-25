@@ -197,6 +197,27 @@ pub struct ElementColors {
     pub text: InheritableColor,
 }
 
+impl ElementColors {
+    /// These colours with what they inherit filled in from `parent`, so
+    /// that a child of this element inherits through it: an element
+    /// that only groups its children (no colours of its own) passes its
+    /// parent's on, rather than nothing.
+    fn inherit_from(&self, parent: Option<&ElementColors>) -> ElementColors {
+        let Some(parent) = parent else {
+            return self.clone();
+        };
+        let pick = |own: &InheritableColor, theirs: &InheritableColor| match own {
+            InheritableColor::Inherited => theirs.clone(),
+            other => other.clone(),
+        };
+        ElementColors {
+            border: self.border,
+            bg: pick(&self.bg, &parent.bg),
+            text: pick(&self.text, &parent.text),
+        }
+    }
+}
+
 struct ResolvedColor {
     color: LinearRgba,
     alt_color: LinearRgba,
@@ -1006,8 +1027,9 @@ impl super::TermWindow {
             ComputedElementContent::Children(kids) => {
                 drop(layers);
 
+                let effective = colors.inherit_from(inherited_colors);
                 for kid in kids {
-                    self.render_element(kid, gl_state, Some(colors))?;
+                    self.render_element(kid, gl_state, Some(&effective))?;
                 }
             }
             ComputedElementContent::Poly { poly, line_width } => {

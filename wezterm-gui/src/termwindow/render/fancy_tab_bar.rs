@@ -370,9 +370,23 @@ impl crate::TermWindow {
                         colors.inactive_tab()
                     };
                     let clear = window::color::LinearRgba::TRANSPARENT;
-                    let fg = fg_color.unwrap_or_else(|| tab.fg_color.into()).to_linear();
+                    // the title's colour reaches Chrome's contrast against
+                    // its tab (the active tab's own colour, else the
+                    // strip's), whatever the theme gave
+                    let focused = self.focused.is_some();
+                    let tab_bg: config::SrgbaTuple = if active {
+                        tab.bg_color.into()
+                    } else {
+                        frame_colour
+                    };
+                    let readable = |c: config::SrgbaTuple| {
+                        chrome_strip::title_colour(c, tab_bg, active, focused).to_linear()
+                    };
+                    let fg = readable(fg_color.unwrap_or_else(|| tab.fg_color.into()));
                     let hover_fg = match colors.inactive_tab_hover.as_ref() {
-                        Some(hover) if !active && fg_color.is_none() => hover.fg_color.to_linear(),
+                        Some(hover) if !active && fg_color.is_none() => {
+                            readable(hover.fg_color.into())
+                        }
                         _ => fg,
                     };
                     // the tab's contents (favicon, title, close button)

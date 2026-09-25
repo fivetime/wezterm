@@ -54,6 +54,11 @@ over the 41-DIP tab; the font's whole height when it has no cap height);
 `close_button.position` (icon 16 from the contents' right, button 28
 around it, top 6); `close_button.show_rules` (the active tab always, an
 inactive one with 68 of contents room, nothing under 32 wide);
+`title.contrast` (the theme's text colour moved towards black or white,
+whichever contrasts most with the tab, until it reaches Chrome's ratio
+for the state — 10.46 active, 7.98 inactive, 5.0 and 4.5 in an unfocused
+window, the unfocused colours first blended 75 % towards the tab:
+`tab_strip_color_mixer.cc` `kTabFgToContrastMap`, `BlendForMinContrast`);
 `favicon.centred_when_alone` (an inactive tab with room for nothing else
 still shows its favicon, centred in the tab — `Tab::UpdateIconVisibility`
 `center_icon_`; the active tab at 56 shows its close button alone);
