@@ -358,16 +358,23 @@ impl XWindowInner {
             });
         }
         // where the window is opaque, for the compositor: the content but
-        // for its round corners (Chrome's UpdateFrameHints)
+        // for its round corners (Chrome's UpdateFrameRegions, the clip
+        // region less its corners); with the solid frame the clip is the
+        // whole window, its borders opaque too (Chrome's window on
+        // deepin: 8,0,833,8 0,8,849,500 for 849 x 508)
         let corner = if restored { u32::from(radius) } else { 0 }
             .min(u32::from(inner.0) / 2)
             .min(u32::from(inner.1));
-        let (l, t, w, h) = (
-            u32::from(insets.left),
-            u32::from(insets.top),
-            u32::from(inner.0),
-            u32::from(inner.1),
-        );
+        let (l, t, w, h) = if edge.is_solid() {
+            (0, 0, u32::from(outer.0), u32::from(outer.1))
+        } else {
+            (
+                u32::from(insets.left),
+                u32::from(insets.top),
+                u32::from(inner.0),
+                u32::from(inner.1),
+            )
+        };
         let opaque: Vec<u32> = if corner == 0 {
             vec![l, t, w, h]
         } else {
