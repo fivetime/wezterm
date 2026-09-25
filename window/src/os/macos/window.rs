@@ -1972,6 +1972,40 @@ fn get_window_class() -> &'static Class {
             YES
         }
 
+        /// `toggleFullScreen:` is what the title bar's green button, the
+        /// View menu's "Enter Full Screen" and Ctrl+Cmd+F send. Unless
+        /// native full screen is configured, it goes to WezTerm's own
+        /// full screen (the window over the whole screen, the menu bar
+        /// and the Dock hidden while it is key): a native full-screen
+        /// window gets a Space of its own, where macOS shows no other
+        /// application's window, whatever its level or collection
+        /// behaviour, unless that application has no Dock icon at all
+        /// (measured on 13.5) — so a window floating beside the terminal,
+        /// NativeTerm's, stays in sight this way and not the other.
+        extern "C" fn toggle_full_screen(this: &mut Object, _sel: Sel, sender: id) {
+            let window_id = unsafe {
+                let view: id = msg_send![this, contentView];
+                view.as_ref()
+                    .and_then(|view| WindowView::get_this(view))
+                    .and_then(|window_view| {
+                        let inner = window_view.inner.borrow();
+                        (!inner.config.native_macos_fullscreen_mode).then_some(inner.window_id)
+                    })
+            };
+            match window_id {
+                Some(window_id) => {
+                    Connection::with_window_inner(window_id, move |inner| {
+                        inner.toggle_fullscreen();
+                        Ok(())
+                    });
+                }
+                None => unsafe {
+                    let superclass = superclass(this);
+                    let () = msg_send![super(this, superclass), toggleFullScreen: sender];
+                },
+            }
+        }
+
         unsafe {
             cls.add_method(
                 sel!(canBecomeKeyWindow),
@@ -1980,6 +2014,10 @@ fn get_window_class() -> &'static Class {
             cls.add_method(
                 sel!(canBecomeMainWindow),
                 yes as extern "C" fn(&mut Object, Sel) -> BOOL,
+            );
+            cls.add_method(
+                sel!(toggleFullScreen:),
+                toggle_full_screen as extern "C" fn(&mut Object, Sel, id),
             );
         }
 
