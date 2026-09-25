@@ -562,7 +562,9 @@ impl TabBarState {
             line.append_line(left_status_line, SEQ_ZERO);
         }
 
-        if config.tab_strip_style == config::TabStripStyle::Chrome {
+        let chrome_strip = config.tab_strip_style == config::TabStripStyle::Chrome;
+        let search_trailing = chrome_strip && config.caption_buttons_lead();
+        if chrome_strip && !search_trailing {
             // Chrome's tab search button, before the tabs (drawn by the
             // fancy bar from the strip's layout; no cells here)
             items.push(TabEntry {
@@ -648,6 +650,16 @@ impl TabBarState {
             });
 
             x += width;
+        }
+        if search_trailing {
+            // the tab search button after the new-tab button, where the
+            // caption buttons hold the leading end
+            items.push(TabEntry {
+                item: TabBarItem::TabSearchButton,
+                title: Line::with_width(0, SEQ_ZERO),
+                x,
+                width: 0,
+            });
         }
 
         // Reserve place for integrated title buttons

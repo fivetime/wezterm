@@ -211,11 +211,17 @@ impl crate::TermWindow {
                     let hover = chrome_tabs::max_contrast(frame_colour)
                         .to_linear()
                         .mul_alpha(chrome_tabs::HIGHLIGHT);
-                    let buttons: f32 = layout
-                        .left_placed
-                        .iter()
-                        .map(|b| b.width + b.margin_left + b.margin_right)
-                        .sum();
+                    // before the tabs: past the caption buttons at the
+                    // left; trailing: past the new-tab button
+                    let before: f32 = if layout.tab_search_trailing {
+                        layout.new_tab.right()
+                    } else {
+                        layout
+                            .left_placed
+                            .iter()
+                            .map(|b| b.width + b.margin_left + b.margin_right)
+                            .sum()
+                    };
                     let pad_x = ((button.w - chevron.w) / 2. - 1.).max(0.).floor();
                     let pad_top = (chevron.y - button.y - 1.).max(0.).round();
                     let pad_bottom = (button.h - 2. - chevron.h - pad_top).max(0.);
@@ -233,7 +239,7 @@ impl crate::TermWindow {
                     .vertical_align(VerticalAlign::Top)
                     .item_type(UIItemType::TabBar(item.item.clone()))
                     .margin(BoxDimension {
-                        left: Dimension::Pixels((button.x - buttons).max(0.)),
+                        left: Dimension::Pixels((button.x - before).max(0.)),
                         right: dip(0.),
                         top: Dimension::Pixels(button.y),
                         bottom: Dimension::Pixels(layout.height - button.y - button.h),
@@ -719,7 +725,10 @@ impl crate::TermWindow {
                             .map(|b| b.width + b.margin_left + b.margin_right)
                             .sum();
                         // (or after the tab search button, when it stands there)
-                        let before = layout.tab_search.map_or(buttons, |b| b.right());
+                        let before = layout
+                            .tab_search
+                            .filter(|_| !layout.tab_search_trailing)
+                            .map_or(buttons, |b| b.right());
                         let body = layout.tabs.first().map_or(0., |t| t.body.x);
                         left_eles.push(
                             Element::new(&font, ElementContent::Text(String::new())).min_width(
@@ -843,13 +852,7 @@ impl crate::TermWindow {
             );
         }
 
-        let window_buttons_at_left = self
-            .config
-            .window_decorations
-            .contains(window::WindowDecorations::INTEGRATED_BUTTONS)
-            && (!left_buttons.is_empty()
-                || self.config.integrated_title_button_style
-                    == IntegratedTitleButtonStyle::MacOsNative);
+        let window_buttons_at_left = self.config.caption_buttons_lead();
 
         let left_padding = if window_buttons_at_left {
             if self.config.integrated_title_button_style == IntegratedTitleButtonStyle::MacOsNative
@@ -1004,6 +1007,7 @@ impl crate::TermWindow {
             drawn_buttons: if images.is_empty() { 138. } else { 0. },
             close_buttons: self.config.show_close_tab_button_in_tabs,
             tab_search: true,
+            tab_search_trailing: self.config.caption_buttons_lead(),
             favicons: self.config.tab_icon.is_some(),
             font: chrome_strip::FontMetrics {
                 ascent: (fm.cell_height.get() + fm.descender.get()) as f32,

@@ -176,6 +176,16 @@ whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
 - The tab search button's icon is two overlapping windows, not Chrome's
   chevron: it opens the tab switcher's grid, not a menu (chosen
   2026-09-25).
+- Where the window's caption buttons stand at the strip's leading end
+  (macOS's traffic lights; a Linux layout with buttons on the left,
+  elementary's close), the tab search button stands at the trailing end
+  instead, 6 DIP after the new-tab button (the new-tab button's own
+  distance from the tabs), and the tabs' room is 34 DIP the less for it
+  where the leading button took 28 of it; the 42-DIP grab handle stays
+  after it. Chrome keeps the button leading everywhere, its traffic
+  lights included. One rule for every platform,
+  `Config::caption_buttons_lead` (chosen 2026-09-26;
+  `Inputs::tab_search_trailing`, under test).
 - Chrome's own frame is drawn from a 64-DIP-slice picture cut in nine,
   so a shadow's blur is exact only up to 64 DIP from a corner; the
   shadows reach 32 at most, so nothing is lost. The solid frame's

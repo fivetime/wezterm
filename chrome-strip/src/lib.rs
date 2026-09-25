@@ -174,6 +174,13 @@ pub struct Inputs {
     /// The tab search button before the tabs (Chrome's, on every normal
     /// window).
     pub tab_search: bool,
+    /// The tab search button after the new-tab button instead, 6 DIP
+    /// past it (the new-tab button's own distance from the tabs): where
+    /// the caption buttons stand at the leading end (macOS's traffic
+    /// lights, a desktop layout with buttons on the left), so that each
+    /// end keeps its own controls. Not Chrome's, which keeps the button
+    /// leading everywhere.
+    pub tab_search_trailing: bool,
     pub font: FontMetrics,
 }
 
@@ -190,6 +197,7 @@ impl Default for Inputs {
             close_buttons: true,
             favicons: true,
             tab_search: false,
+            tab_search_trailing: false,
             font: FontMetrics {
                 ascent: 17.4,
                 descent: 4.3,
@@ -393,9 +401,12 @@ pub struct Layout {
     /// The new-tab button (a 28 circle) and its icon.
     pub new_tab: Rect,
     pub new_tab_icon: Rect,
-    /// The tab search button and its 16-DIP icon, when asked for.
+    /// The tab search button and its 16-DIP icon, when asked for; and
+    /// whether it stands after the new-tab button rather than before
+    /// the tabs.
     pub tab_search: Option<Rect>,
     pub tab_search_icon: Option<Rect>,
+    pub tab_search_trailing: bool,
     /// The caption buttons placed.
     pub left_placed: Vec<PlacedButton>,
     pub right_placed: Vec<PlacedButton>,
@@ -438,29 +449,32 @@ impl Layout {
             leading - leading_margin + leading_margin.max(LEADING_MARGIN)
         };
         // the tab search button 6 into the region, the tabs' strip 28
-        // past its start (Chrome's strip margin for it)
-        let (tab_search, tab_search_icon) = if inputs.tab_search {
-            let b = Rect::new(
-                d(region_left + TAB_SEARCH_INSET),
-                d(TAB_TOP),
-                d(TAB_SEARCH_BUTTON),
-                d(TAB_SEARCH_BUTTON),
-            );
+        // past its start (Chrome's strip margin for it); or, trailing,
+        // 6 past the new-tab button, the tabs' room 34 the less for it
+        let search_trails = inputs.tab_search && inputs.tab_search_trailing;
+        let search_button = |x: f32| {
             let inset = (TAB_SEARCH_BUTTON - TAB_SEARCH_ICON) / 2.;
-            let c = Rect::new(
-                d(region_left + TAB_SEARCH_INSET + inset),
-                d(TAB_TOP + inset),
-                d(TAB_SEARCH_ICON),
-                d(TAB_SEARCH_ICON),
-            );
-            (Some(b), Some(c))
-        } else {
-            (None, None)
+            (
+                Rect::new(d(x), d(TAB_TOP), d(TAB_SEARCH_BUTTON), d(TAB_SEARCH_BUTTON)),
+                Rect::new(
+                    d(x + inset),
+                    d(TAB_TOP + inset),
+                    d(TAB_SEARCH_ICON),
+                    d(TAB_SEARCH_ICON),
+                ),
+            )
         };
-        let region_left = if inputs.tab_search {
+        let leading_search = (inputs.tab_search && !search_trails)
+            .then(|| search_button(region_left + TAB_SEARCH_INSET));
+        let region_left = if leading_search.is_some() {
             region_left + TAB_SEARCH_BUTTON
         } else {
             region_left
+        };
+        let trailing_room = if search_trails {
+            TAB_SEARCH_BUTTON + NEW_TAB_AFTER_TABS
+        } else {
+            0.
         };
         // (the first trailing button's own left margin lies outside the
         // buttons' bounds; the caption margin, its right margin, is added)
@@ -475,7 +489,8 @@ impl Layout {
         let region_right = width - trailing;
         // the tabs share the region less the new-tab button's room and
         // the grab handle's
-        let available = (region_right - region_left - NEW_TAB_ROOM - GRAB_HANDLE).max(0.);
+        let available =
+            (region_right - region_left - NEW_TAB_ROOM - trailing_room - GRAB_HANDLE).max(0.);
         let widths = tab_widths(available, inputs.tabs, inputs.active);
         let tab_top = d(TAB_TOP);
         let tab_height = d(HIGHLIGHT_HEIGHT);
@@ -611,12 +626,16 @@ impl Layout {
             .last()
             .map_or(region_left, |t| t.bounds_dip.right())
             .min(strip_right);
-        let new_tab = Rect::new(
-            d(tabs_right - FOOT + NEW_TAB_AFTER_TABS),
-            tab_top,
-            d(NEW_TAB_BUTTON),
-            d(NEW_TAB_BUTTON),
-        );
+        let new_tab_x = tabs_right - FOOT + NEW_TAB_AFTER_TABS;
+        let new_tab = Rect::new(d(new_tab_x), tab_top, d(NEW_TAB_BUTTON), d(NEW_TAB_BUTTON));
+        let (tab_search, tab_search_icon) = match leading_search {
+            Some((b, c)) => (Some(b), Some(c)),
+            None if search_trails => {
+                let (b, c) = search_button(new_tab_x + NEW_TAB_BUTTON + NEW_TAB_AFTER_TABS);
+                (Some(b), Some(c))
+            }
+            None => (None, None),
+        };
         let icon_inset = d((NEW_TAB_BUTTON - NEW_TAB_ICON) / 2.);
         Layout {
             scale,
@@ -635,6 +654,7 @@ impl Layout {
             new_tab,
             tab_search,
             tab_search_icon,
+            tab_search_trailing: search_trails,
             left_placed,
             right_placed,
         }
@@ -1207,6 +1227,56 @@ mod tests {
         });
         assert_eq!(none.tab_search, None);
         assert_eq!(none.tabs[0].bounds_dip.x, 0.);
+    }
+
+    /// Where the caption buttons lead, the tab search button trails: 6
+    /// past the new-tab button, the tabs starting as without it, and a
+    /// full strip keeping 34 more before the grab handle for it.
+    #[test]
+    fn the_tab_search_button_after_the_new_tab_button() {
+        let t = Layout::compute(&Inputs {
+            tabs: 2,
+            tab_search: true,
+            tab_search_trailing: true,
+            ..Inputs::default()
+        });
+        assert!(t.tab_search_trailing);
+        assert_eq!(t.tabs[0].bounds_dip.x, 0.);
+        assert_eq!(t.tabs[0].body.x, 12.);
+        assert_eq!(t.tab_search.map(|r| r.x), Some(t.new_tab.right() + 6.));
+        assert_eq!(t.tab_search.map(|r| (r.y, r.w, r.h)), Some((6., 28., 28.)));
+        assert_eq!(
+            t.tab_search_icon.map(|r| r.x),
+            Some(t.new_tab.right() + 12.)
+        );
+        assert_eq!(
+            t.tab_search_icon.map(|r| (r.y, r.w, r.h)),
+            Some((12., 16., 16.))
+        );
+        let full = |trailing: bool| {
+            Layout::compute(&Inputs {
+                tabs: 60,
+                width_px: 600.,
+                active: 0,
+                tab_search: true,
+                tab_search_trailing: trailing,
+                ..Inputs::default()
+            })
+        };
+        let (lead, trail) = (full(false), full(true));
+        // trailing, the button ends where the new-tab button does when
+        // leading: at the grab handle, less the foot the button overlaps
+        assert_eq!(lead.new_tab.right(), 600. - 42. - FOOT);
+        assert_eq!(
+            trail.tab_search.map(|r| r.right()),
+            Some(lead.new_tab.right())
+        );
+        assert!(!lead.tab_search_trailing);
+        // the new-tab button 34 further in for it, the tabs' room 6 less
+        // (the leading button takes 28 of it, the trailing one 28 + 6)
+        assert_eq!(trail.new_tab.x, lead.new_tab.x - 34.);
+        let shown = |l: &Layout| l.tabs.iter().filter(|t| t.visible).count();
+        assert!(shown(&trail) <= shown(&lead) && shown(&trail) + 1 >= shown(&lead));
     }
 
     #[test]

@@ -983,6 +983,18 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Whether the window's caption buttons stand at the leading end of
+    /// the tab bar: macOS's own (the traffic lights), or a desktop layout
+    /// with buttons on the left (elementary's close). The Chrome strip
+    /// then puts its tab search button at the trailing end, after the
+    /// new-tab button, so that each end keeps its own controls.
+    pub fn caption_buttons_lead(&self) -> bool {
+        self.window_decorations
+            .contains(WindowDecorations::INTEGRATED_BUTTONS)
+            && (self.integrated_title_button_style == IntegratedTitleButtonStyle::MacOsNative
+                || !self.integrated_title_button_sides().0.is_empty())
+    }
+
     /// The integrated title buttons at the left and at the right end of
     /// the tab bar, in order.
     pub fn integrated_title_button_sides(
