@@ -1230,7 +1230,7 @@ impl Client {
             }),
             Some(_) | None => {
                 if !prefer_mux {
-                    if let Ok(gui) = crate::discovery::resolve_gui_sock_path(class_name) {
+                    if let Some(gui) = crate::discovery::resolve_live_gui_sock_path(class_name) {
                         return Ok(config::UnixDomain {
                             socket_path: Some(gui),
                             no_serve_automatically: true,

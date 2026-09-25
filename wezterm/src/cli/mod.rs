@@ -169,7 +169,7 @@ async fn run_cli_async(opts: &crate::Opt, cli: CliCommand) -> anyhow::Result<()>
     let mut ui = mux::connui::ConnectionUI::new_headless();
     let initial = true;
 
-    let client = Client::new_default_unix_domain(
+    let client = match Client::new_default_unix_domain(
         initial,
         &mut ui,
         cli.no_auto_start,
@@ -177,7 +177,19 @@ async fn run_cli_async(opts: &crate::Opt, cli: CliCommand) -> anyhow::Result<()>
         cli.class
             .as_deref()
             .unwrap_or(wezterm_gui_subcommands::DEFAULT_WINDOW_CLASS),
-    )?;
+    ) {
+        Ok(client) => client,
+        // Told not to start anything, no GUI to talk to is an answer, not
+        // an error to log: a program polling `wezterm cli` once a second
+        // while no window is open would otherwise leave a log file per
+        // call in the runtime dir (the logger opens its file on the first
+        // record), tens of thousands a day.
+        Err(err) if cli.no_auto_start => {
+            eprintln!("{err:#}");
+            std::process::exit(1);
+        }
+        Err(err) => return Err(err),
+    };
 
     match cli.sub {
         CliSubCommand::ListClients(cmd) => cmd.run(client).await,

@@ -517,11 +517,11 @@ impl Publish {
             return Self::NoConnectNoPublish;
         }
 
-        match wezterm_client::discovery::resolve_gui_sock_path(
+        match wezterm_client::discovery::resolve_live_gui_sock_path(
             &crate::termwindow::get_window_class(),
         ) {
-            Ok(path) => Self::TryPathOrPublish(path),
-            Err(_) => Self::NoConnectButPublish,
+            Some(path) => Self::TryPathOrPublish(path),
+            None => Self::NoConnectButPublish,
         }
     }
 

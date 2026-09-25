@@ -336,6 +336,22 @@ pub fn resolve_gui_sock_path(class_name: &str) -> anyhow::Result<PathBuf> {
     NameHolder::resolve(class_name)
 }
 
+/// The published path for `class_name` when a GUI answers on it, else
+/// the youngest GUI socket in the runtime dir that answers. A published
+/// path outlives its GUI when that dies without cleaning up (a crash, a
+/// reboot on macOS, where the runtime dir persists): every `wezterm cli`
+/// then failed on it, and a fresh GUI, told to try it, would not publish
+/// its own.
+pub fn resolve_live_gui_sock_path(class_name: &str) -> Option<PathBuf> {
+    if let Ok(path) = NameHolder::resolve(class_name) {
+        if !is_sock_dead(&path) {
+            return Some(path);
+        }
+        log::debug!("published gui path {} answers nobody", path.display());
+    }
+    discover_gui_socks().pop()
+}
+
 /// This function returns a list of the gui-sock- paths in
 /// the runtime dir.  These represent the locally running
 /// instances of wezterm-gui.
