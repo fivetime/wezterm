@@ -327,6 +327,43 @@ impl crate::TermWindow {
         Ok(())
     }
 
+    /// A quad over the `r`-pixel corner square at `x` along the top
+    /// edge, carrying the window's round corner as a mask (see
+    /// `chrome_tabs::corner_mask`): on `MASK_ZINDEX`, it clears what
+    /// lies outside the arc.
+    pub fn corner_mask_quad(
+        &self,
+        layers: &mut TripleLayerQuadAllocator,
+        layer_num: usize,
+        x: f32,
+        r: f32,
+        right: bool,
+    ) -> anyhow::Result<()> {
+        let left_offset = self.dimensions.pixel_width as f32 / 2.;
+        let top_offset = self.dimensions.pixel_height as f32 / 2.;
+        let gl_state = self.render_state.as_ref().unwrap();
+        let side = r.round() as u32;
+        let sprite = gl_state
+            .glyph_cache
+            .borrow_mut()
+            .cached_corner_mask(side, right)?;
+        let mut quad = layers.allocate(layer_num)?;
+        let x = x.round();
+        quad.set_position(
+            x - left_offset,
+            -top_offset,
+            x + side as f32 - left_offset,
+            side as f32 - top_offset,
+        );
+        quad.set_texture(sprite.texture_coords());
+        let white = LinearRgba::with_components(1., 1., 1., 1.);
+        quad.set_fg_color(white);
+        quad.set_alt_color_and_mix_value(white, 0.);
+        quad.set_hsv(None);
+        quad.set_has_color(false);
+        Ok(())
+    }
+
     /// A quad showing the SVG icon at `path`, `size` pixels square, as a
     /// mask for the caller to colour; `None` when the file cannot be drawn.
     pub fn icon_quad<'a>(

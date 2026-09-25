@@ -1,5 +1,5 @@
 use crate::colorease::ColorEaseUniform;
-use crate::renderstate::ERASE_ZINDEX;
+use crate::renderstate::{ERASE_ZINDEX, MASK_ZINDEX};
 use crate::termwindow::webgpu::ShaderUniform;
 use crate::termwindow::RenderFrame;
 use crate::uniforms::UniformBuilder;
@@ -129,6 +129,8 @@ impl crate::TermWindow {
 
                     render_pass.set_pipeline(if layer.zindex() == ERASE_ZINDEX {
                         &webgpu.erase_pipeline
+                    } else if layer.zindex() == MASK_ZINDEX {
+                        &webgpu.mask_pipeline
                     } else {
                         &webgpu.render_pipeline
                     });
@@ -216,6 +218,22 @@ impl crate::TermWindow {
         // no blending: ERASE_ZINDEX's quads replace what is beneath
         let replacing = glium::DrawParameters::default();
 
+        // MASK_ZINDEX's quads multiply what is beneath by their alpha
+        let masking = glium::DrawParameters {
+            blend: glium::Blend {
+                color: BlendingFunction::Addition {
+                    source: LinearBlendingFactor::Zero,
+                    destination: LinearBlendingFactor::SourceAlpha,
+                },
+                alpha: BlendingFunction::Addition {
+                    source: LinearBlendingFactor::Zero,
+                    destination: LinearBlendingFactor::SourceAlpha,
+                },
+                constant_value: (0.0, 0.0, 0.0, 0.0),
+            },
+            ..Default::default()
+        };
+
         // Clamp and use the nearest texel rather than interpolate.
         // This prevents things like the box cursor outlines from
         // being randomly doubled in width or height
@@ -269,6 +287,8 @@ impl crate::TermWindow {
                         &uniforms,
                         if layer.zindex() == ERASE_ZINDEX {
                             &replacing
+                        } else if layer.zindex() == MASK_ZINDEX {
+                            &masking
                         } else if subpixel_aa {
                             &dual_source_blending
                         } else {

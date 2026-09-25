@@ -572,6 +572,7 @@ pub struct GlyphCache {
     picture_glyphs: HashMap<(String, u32, u32), Option<Sprite>>,
     /// Chrome tab shapes by size, radii and filled or outlined
     tab_shapes: HashMap<(u32, u32, u32, u32, bool), Sprite>,
+    corner_masks: HashMap<(u32, bool), Sprite>,
     pub cursor_glyphs: HashMap<(Option<CursorShape>, u8), Sprite>,
     pub color: HashMap<(RgbColor, NotNan<f32>), Sprite>,
     min_frame_duration: Duration,
@@ -598,6 +599,7 @@ impl GlyphCache {
             icon_glyphs: HashMap::new(),
             picture_glyphs: HashMap::new(),
             tab_shapes: HashMap::new(),
+            corner_masks: HashMap::new(),
             cursor_glyphs: HashMap::new(),
             color: HashMap::new(),
             min_frame_duration: Duration::from_millis(1000 / fonts.config().max_fps as u64),
@@ -630,6 +632,7 @@ impl GlyphCache {
             icon_glyphs: HashMap::new(),
             picture_glyphs: HashMap::new(),
             tab_shapes: HashMap::new(),
+            corner_masks: HashMap::new(),
             cursor_glyphs: HashMap::new(),
             color: HashMap::new(),
             min_frame_duration: Duration::from_millis(1000 / fonts.config().max_fps as u64),
@@ -1205,6 +1208,19 @@ impl GlyphCache {
             crate::termwindow::render::chrome_tabs::shape(w, h, top as f32, foot as f32, outline);
         let sprite = self.atlas.allocate(&image)?;
         self.tab_shapes.insert(key, sprite.clone());
+        Ok(sprite)
+    }
+
+    /// The mask of a window's round top corner over its `r`-pixel
+    /// corner square (see `chrome_tabs::corner_mask`).
+    pub fn cached_corner_mask(&mut self, r: u32, right: bool) -> anyhow::Result<Sprite> {
+        let key = (r, right);
+        if let Some(sprite) = self.corner_masks.get(&key) {
+            return Ok(sprite.clone());
+        }
+        let image = crate::termwindow::render::chrome_tabs::corner_mask(r, right);
+        let sprite = self.atlas.allocate(&image)?;
+        self.corner_masks.insert(key, sprite.clone());
         Ok(sprite)
     }
 

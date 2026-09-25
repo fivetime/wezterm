@@ -138,10 +138,83 @@ pub fn shape(w: u32, h: u32, top: f32, foot: f32, outline: bool) -> window::bitm
     image
 }
 
+/// A window's round top corner over its `r`-pixel corner square, as a
+/// white mask: the quarter disc inside the window (its centre `r` in
+/// and `r` down; the right corner mirrored), its edge sampled 4 x 4 as
+/// the frame's own corners are (`chrome_strip::frame`). Multiplied
+/// into the content's corner square, it leaves the content inside the
+/// arc as drawn and clears what lies outside it, where the window's
+/// own round corner is (see `TermWindow::mask_edge_corners`).
+pub fn corner_mask(r: u32, right: bool) -> window::bitmaps::Image {
+    let side = r.max(1) as usize;
+    let rf = r as f32;
+    let centre_x = if right { 0. } else { rf };
+    let mut mask = Vec::with_capacity(side * side * 4);
+    for y in 0..side {
+        for x in 0..side {
+            // 4 x 4 samples per pixel for the arc's edge (as the frame's
+            // own corners, `chrome_strip::frame`)
+            let mut inside = 0;
+            for sy in 0..4 {
+                for sx in 0..4 {
+                    let px = x as f32 + (sx as f32 + 0.5) / 4.;
+                    let py = y as f32 + (sy as f32 + 0.5) / 4.;
+                    if (px - centre_x).powi(2) + (py - rf).powi(2) <= rf * rf {
+                        inside += 1;
+                    }
+                }
+            }
+            let alpha = (inside * 255 / 16) as u8;
+            mask.extend([alpha; 4]);
+        }
+    }
+    window::bitmaps::Image::from_raw(side, side, mask)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use window::bitmaps::BitmapImage;
+
+    /// The corner mask keeps the inside of the arc and clears the
+    /// outside: the corner pixel itself clear, the pixel by the centre
+    /// full, the right corner the mirror image.
+    #[test]
+    fn the_corner_mask_is_the_quarter_disc_inside_the_window() {
+        let alpha = |image: &window::bitmaps::Image, x: usize, y: usize| {
+            image.pixel_data_slice()[(y * image.image_dimensions().0 + x) * 4 + 3]
+        };
+        let left = corner_mask(14, false);
+        assert_eq!(left.image_dimensions(), (14, 14));
+        assert_eq!(alpha(&left, 0, 0), 0, "outside the arc");
+        assert_eq!(alpha(&left, 13, 13), 255, "by the centre");
+        assert_eq!(
+            alpha(&left, 13, 0),
+            255,
+            "the top edge reaches the corner square's far side"
+        );
+        // the arc's edge is anti-aliased somewhere (on the diagonal it
+        // happens to fall between pixels: 3,3 out, 4,4 in)
+        let partial = (0..14)
+            .flat_map(|y| (0..14).map(move |x| (x, y)))
+            .filter(|&(x, y)| matches!(alpha(&left, x, y), 1..=254))
+            .count();
+        assert!(partial >= 8, "anti-aliased edge pixels: {}", partial);
+        assert_eq!(alpha(&left, 3, 3), 0);
+        assert_eq!(alpha(&left, 4, 4), 255);
+        let right = corner_mask(14, true);
+        assert_eq!(alpha(&right, 13, 0), 0);
+        assert_eq!(alpha(&right, 0, 13), 255);
+        for y in 0..14 {
+            for x in 0..14 {
+                assert_eq!(
+                    alpha(&left, x, y),
+                    alpha(&right, 13 - x, y),
+                    "mirrored at {x},{y}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn the_shape() {

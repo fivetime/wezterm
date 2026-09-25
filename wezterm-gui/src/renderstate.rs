@@ -463,6 +463,13 @@ pub struct RenderLayer {
 /// round ones beneath; see `WindowState::CLIENT_EDGE`).
 pub const ERASE_ZINDEX: i8 = i8::MAX;
 
+/// The layer drawn after every ordinary one, multiplying the pixels
+/// beneath, colour and alpha, by its quads' alpha: a mask. The content's
+/// top corners are cut to a window's own round ones this way, so that
+/// what the content drew inside the arc stays (a button by the corner)
+/// and only what lies outside it is cleared (`TermWindow::mask_edge_corners`).
+pub const MASK_ZINDEX: i8 = i8::MAX - 1;
+
 impl RenderLayer {
     pub fn zindex(&self) -> i8 {
         self.zindex

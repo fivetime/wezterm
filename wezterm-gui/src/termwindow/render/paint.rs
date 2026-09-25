@@ -277,15 +277,18 @@ impl crate::TermWindow {
         drop(layers);
         self.paint_modal().context("paint_modal")?;
         self.paint_hover_card().context("paint_hover_card")?;
-        self.clear_edge_corners().context("clear_edge_corners")?;
+        self.mask_edge_corners().context("mask_edge_corners")?;
 
         Ok(())
     }
 
     /// A window drawing its own edge (`WindowState::CLIENT_EDGE`) shows
     /// round top corners from beneath the content: the content's own
-    /// corners are cleared for them, last and replacing.
-    fn clear_edge_corners(&mut self) -> anyhow::Result<()> {
+    /// corner squares are multiplied, last, by the arc's coverage, so
+    /// that what lies outside the arc is cleared and what the content
+    /// drew inside it stays (Chrome clips its painting to the rounded
+    /// window shape; a button by the corner keeps its round highlight).
+    fn mask_edge_corners(&mut self) -> anyhow::Result<()> {
         if !self.window_state.contains(window::WindowState::CLIENT_EDGE) {
             return Ok(());
         }
@@ -298,11 +301,10 @@ impl crate::TermWindow {
             return Ok(());
         }
         let gl_state = self.render_state.as_ref().unwrap();
-        let layer = gl_state.layer_for_zindex(crate::renderstate::ERASE_ZINDEX)?;
+        let layer = gl_state.layer_for_zindex(crate::renderstate::MASK_ZINDEX)?;
         let mut layers = layer.quad_allocator();
-        let clear = window::color::LinearRgba::TRANSPARENT;
-        self.filled_rectangle(&mut layers, 0, euclid::rect(0., 0., r, r), clear)?;
-        self.filled_rectangle(&mut layers, 0, euclid::rect(width - r, 0., r, r), clear)?;
+        self.corner_mask_quad(&mut layers, 0, 0., r, false)?;
+        self.corner_mask_quad(&mut layers, 0, width - r, r, true)?;
         Ok(())
     }
 }

@@ -169,6 +169,13 @@ whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
 
 - The toolbar's top line's rounded ends at the window's corners
   (`kToolbarCornerRadius` 8): the terminal's content is square.
+- The window's round top corners cut the content by the arc's coverage
+  (a mask multiplied into the content's corner squares, drawn last),
+  as Chrome clips its painting to the rounded window shape: a button
+  by the corner keeps its round highlight. Until 2026-09-26 the whole
+  r x r corner square was cleared to the frame's picture beneath, which
+  took a square bite out of the tab search button's and the close
+  button's highlights (seen on Lingmo, radius 14).
 - `gtk_frame.frame_thickness_dip_measurement` is done on a 2x render and
   ceiled; Chrome measures the 1x asset. A shadow ending on a half DIP can
   come out 1 DIP thicker.

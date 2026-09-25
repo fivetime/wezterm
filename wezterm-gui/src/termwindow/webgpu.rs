@@ -32,6 +32,8 @@ pub struct WebGpuState {
     pub render_pipeline: wgpu::RenderPipeline,
     /// The same, replacing instead of blending (`ERASE_ZINDEX`)
     pub erase_pipeline: wgpu::RenderPipeline,
+    /// `MASK_ZINDEX`'s: destination times source alpha
+    pub mask_pipeline: wgpu::RenderPipeline,
     shader_uniform_bind_group_layout: wgpu::BindGroupLayout,
     pub texture_bind_group_layout: wgpu::BindGroupLayout,
     pub texture_nearest_sampler: wgpu::Sampler,
@@ -497,6 +499,18 @@ impl WebGpuState {
         };
         let render_pipeline = pipeline("Render Pipeline", wgpu::BlendState::ALPHA_BLENDING);
         let erase_pipeline = pipeline("Erase Pipeline", wgpu::BlendState::REPLACE);
+        let multiply_by_alpha = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Zero,
+            dst_factor: wgpu::BlendFactor::SrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let mask_pipeline = pipeline(
+            "Mask Pipeline",
+            wgpu::BlendState {
+                color: multiply_by_alpha,
+                alpha: multiply_by_alpha,
+            },
+        );
 
         Ok(Self {
             adapter_info,
@@ -508,6 +522,7 @@ impl WebGpuState {
             dimensions: RefCell::new(dimensions),
             render_pipeline,
             erase_pipeline,
+            mask_pipeline,
             handle,
             shader_uniform_bind_group_layout,
             texture_bind_group_layout,
