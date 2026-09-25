@@ -293,7 +293,9 @@ impl WaylandWindow {
                     .contains(WindowDecorations::INTEGRATED_BUTTONS)
                     && !config.window_decorations.contains(WindowDecorations::TITLE)
             })
-            .and_then(|c| match crate::os::edge::Edge::load(c) {
+            // (Wayland places a window by its xdg_surface geometry: Chrome's
+            // frame has its shadow, and its round corners, everywhere)
+            .and_then(|c| match crate::os::edge::Edge::new(c, true, true) {
                 Ok(edge) => Some(edge),
                 Err(err) => {
                     log::warn!("window edge: {err:#}");

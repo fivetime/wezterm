@@ -89,6 +89,27 @@ than re-rendered per scale); `gtk_frame.solid_frame` gate
 (`_GTK_FRAME_EXTENTS` known to the window manager, a compositor
 present, not Xfwm4).
 
+Chrome's own frame (`integrated_window_edge = { chrome = true }`, what
+NativeTerm asks for on a Qt desktop, where Chrome's toolkit gives it no
+frame: `chrome_strip::frame`, tested by `cargo test -p chrome-strip
+frame`): `frame.md_shadow_values` (elevation 16 focused, 2 not: the key
+shadow offset by the elevation, blurred 4x, at 0x3d; the ambient one
+blurred 2x at 0x1f), `frame.shadow_sigma` (`RadiusToSigma` of half the
+blur), `frame.border_insets_shadow` TLBR(10, 16, 32, 16) from the
+shadows' extents and the 10-DIP band, `frame.exterior_border` (1 px
+black at 0x26 outside the content), `frame.corner_radius` 8
+(`Emphasis::kHigh`; 0 tiled or without a compositor); and, where the
+window manager does not take `_GTK_FRAME_EXTENTS` (deepin's KWin),
+`frame.solid` (`ShouldDrawRestoredFrameShadow` false): no shadow, the
+frame's colour 4 DIP either side and below (`kFrameBorderThickness`),
+none above, the whole window one round-cornered outline with a 1-px
+interior line at 0x26 in black or white (`PickContrastingColor`), the
+line's top run across the strip's first row, the content's top 4 DIP
+resizing (`kResizeTopBorderThickness`), no `_GTK_FRAME_EXTENTS`. The
+X11 window picks the variant from the same facts Chrome does
+(`_GTK_FRAME_EXTENTS` in `_NET_SUPPORTED`, not Xfwm4; `_NET_WM_CM_S*`
+owned); Wayland always has the shadow.
+
 Hover card: `hover_card.card.client_width_dip` 256,
 `hover_card.corner_radius_dip` 8, `hover_card.text.margins` 12,
 `hover_card.show_delay.algorithm` (300 ms up to a 64-wide tab, 800 at
@@ -111,9 +132,6 @@ whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
   room ends, not faded.
 - The close button's ripple (`close_button.ripple_timings`), the focus
   rings, keyboard focus.
-- Chrome's non-GTK frame (Qt desktops get MD shadows there): NativeTerm
-  draws the GTK theme's frame on every desktop, with the Qt palette's
-  colours where the desktop is a Qt one.
 - Wayland tiled edges (`frame.tiled_effects` is X11 only here).
 
 ## Known differences
@@ -124,3 +142,9 @@ whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
   ceiled; Chrome measures the 1x asset. A shadow ending on a half DIP can
   come out 1 DIP thicker.
 - The favicon is the icon theme's terminal icon; Chrome's is the page's.
+- Chrome's own frame is drawn from a 64-DIP-slice picture cut in nine,
+  so a shadow's blur is exact only up to 64 DIP from a corner; the
+  shadows reach 32 at most, so nothing is lost. The solid frame's
+  interior line is blended over the strip's colour on its top row (the
+  strip is opaque there), where Chrome draws it over the frame's own
+  colour: the same pixel.

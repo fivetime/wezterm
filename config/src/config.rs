@@ -2334,17 +2334,31 @@ pub struct TitleButtonImages {
 /// corners kept, edges stretched — around the window. Pixels at 96 dpi.
 #[derive(Debug, Clone, PartialEq, FromDynamic, ToDynamic)]
 pub struct WindowEdge {
+    /// Chrome's own frame instead of a theme's pictures (what Chrome draws
+    /// on a desktop whose toolkit gives it none, a Qt one): a Material
+    /// shadow around round top corners where the window manager knows
+    /// `_GTK_FRAME_EXTENTS`, else a solid 4-DIP border with no shadow.
+    /// The pictures and the reach below are then not needed.
+    #[dynamic(default)]
+    pub chrome: bool,
     /// The picture for a focused window, and for one without the focus.
+    #[dynamic(default)]
     pub focused: String,
+    #[dynamic(default)]
     pub unfocused: String,
     /// How far the drawing reaches outside the window on each side.
+    #[dynamic(default)]
     pub top: f64,
+    #[dynamic(default)]
     pub right: f64,
+    #[dynamic(default)]
     pub bottom: f64,
+    #[dynamic(default)]
     pub left: f64,
     /// The top corners' radius.
     #[dynamic(default)]
     pub radius: f64,
+    #[dynamic(default = "default_edge_slice")]
     pub slice: f64,
     /// The band just outside the window that resizes it (Chrome's 10).
     #[dynamic(default = "default_edge_input")]
@@ -2353,6 +2367,10 @@ pub struct WindowEdge {
 
 fn default_edge_input() -> f64 {
     10.
+}
+
+fn default_edge_slice() -> f64 {
+    64.
 }
 
 /// How the fancy tab bar draws its tabs.

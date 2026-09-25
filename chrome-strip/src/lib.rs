@@ -18,6 +18,8 @@
 
 pub use wezterm_color_types::SrgbaTuple;
 
+pub mod frame;
+
 // ---------------------------------------------------------------- DIP
 
 /// kTabStripHeight = kTabHeight (34 + kTabstripToolbarOverlap) +

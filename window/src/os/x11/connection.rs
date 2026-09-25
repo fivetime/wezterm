@@ -486,6 +486,14 @@ impl XConnection {
     /// window manager knows `_GTK_FRAME_EXTENTS`, so it places the window
     /// by its content rather than its shadow.
     pub(crate) fn supports_client_side_edge(&self) -> bool {
+        self.wm_takes_frame_extents() && self.has_compositor()
+    }
+
+    /// The window manager places a window by `_GTK_FRAME_EXTENTS`
+    /// (Chrome's CanSetDecorationInsets): it is in `_NET_SUPPORTED`, and
+    /// the manager is not Xfwm4, which places a window by its shadow
+    /// (Chrome's one exception, crbug.com/1260821).
+    pub(crate) fn wm_takes_frame_extents(&self) -> bool {
         if !self
             .supported
             .borrow()
@@ -493,9 +501,7 @@ impl XConnection {
         {
             return false;
         }
-        // Xfwm4 places a window by its shadow (Chrome's one exception,
-        // crbug.com/1260821)
-        if get_wm_name(
+        !get_wm_name(
             &self.conn,
             self.root,
             self.atom_net_supporting_wm_check,
@@ -503,9 +509,12 @@ impl XConnection {
             self.atom_utf8_string,
         )
         .is_ok_and(|name| name == "Xfwm4")
-        {
-            return false;
-        }
+    }
+
+    /// A compositing manager runs (someone owns `_NET_WM_CM_S<screen>`):
+    /// translucent margins and round corners show as such (Chrome's
+    /// IsWindowCompositingSupported).
+    pub(crate) fn has_compositor(&self) -> bool {
         let Ok(cm) = Self::intern_atom(&self.conn, &format!("_NET_WM_CM_S{}", self.screen_num))
         else {
             return false;

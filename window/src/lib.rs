@@ -109,7 +109,7 @@ impl std::string::ToString for Appearance {
 
 bitflags! {
     #[derive(Default)]
-    pub struct WindowState: u8 {
+    pub struct WindowState: u16 {
         /// Occupies the whole screen; cannot be resized while in this state.
         const FULL_SCREEN = 1<<1;
         /// Maximized along either or both of horizontal or vertical dimensions;
@@ -130,6 +130,10 @@ bitflags! {
         /// edge): Chrome keeps only the resize band of its frame then, no
         /// shadow and no round corners.
         const TILED = 1<<7;
+        /// The window's own edge is Chrome's solid frame (no shadow: the
+        /// window manager does not take `_GTK_FRAME_EXTENTS`): its border
+        /// line crosses the content's first row.
+        const SOLID_EDGE = 1<<8;
     }
 }
 

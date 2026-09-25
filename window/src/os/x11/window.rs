@@ -334,9 +334,10 @@ impl XWindowInner {
         );
         self.insets = insets;
         let conn = self.conn();
-        // where the window really is, for the window manager
+        // where the window really is, for the window manager (Chrome's
+        // solid frame is part of the window)
         let extents = conn.atom_gtk_frame_extents;
-        if insets.is_empty() {
+        if insets.is_empty() || !edge.is_extents() {
             conn.send_request_no_reply_log(&xcb::x::DeleteProperty {
                 window: self.window_id,
                 property: extents,
@@ -532,7 +533,15 @@ impl XWindowInner {
             isize::from(y) - self.insets.top as isize,
         );
         let inside = cx >= 0 && cy >= 0 && cx < self.width as isize && cy < self.height as isize;
-        if inside {
+        // Chrome's solid frame has no band above: the content's top 4 DIP
+        // resize instead (kResizeTopBorderThickness)
+        let top_band = self
+            .edge
+            .as_ref()
+            .filter(|e| e.is_solid() && !self.tiled)
+            .map(|e| e.band(self.dpi / 96.) as isize)
+            .unwrap_or(0);
+        if inside && cy >= top_band {
             if self.on_edge {
                 self.on_edge = false;
                 let _ = self.cursors.set_cursor(self.window_id, self.gui_cursor);
@@ -544,7 +553,11 @@ impl XWindowInner {
             .as_ref()
             .map(|e| e.band(self.dpi / 96.))
             .unwrap_or_default();
-        let side = crate::os::edge::side_at(x.into(), y.into(), self.outer, self.insets, band);
+        let side = if inside {
+            Some(crate::ResizeEdge::Top)
+        } else {
+            crate::os::edge::side_at(x.into(), y.into(), self.outer, self.insets, band)
+        };
         let cursor = side.map(|side| {
             use crate::ResizeEdge as E;
             match side {
@@ -1549,8 +1562,11 @@ impl XWindowInner {
         } else if vert || horz {
             window_state |= WindowState::TILED;
         }
-        if self.edge.is_some() && Self::restored(window_state) {
+        if let Some(edge) = self.edge.as_ref().filter(|_| Self::restored(window_state)) {
             window_state |= WindowState::CLIENT_EDGE;
+            if edge.is_solid() {
+                window_state |= WindowState::SOLID_EDGE;
+            }
         }
 
         Ok(window_state)
@@ -1727,21 +1743,28 @@ impl XWindow {
 
         let mut events = WindowEventSender::new(event_handler);
 
-        // the desktop theme's edge, where this window may draw its own
+        // the window's own edge: the desktop theme's, where the window
+        // manager and a compositor let the shadow hang outside the
+        // window; Chrome's own frame anywhere (with a shadow under those
+        // conditions, else solid; round corners with a compositor)
         let edge = config
             .integrated_window_edge
             .as_ref()
-            .filter(|_| {
+            .filter(|c| {
                 config
                     .window_decorations
                     .contains(WindowDecorations::INTEGRATED_BUTTONS)
-                    && conn.supports_client_side_edge()
+                    && (c.chrome || conn.supports_client_side_edge())
             })
-            .and_then(|c| match crate::os::edge::Edge::load(c) {
-                Ok(edge) => Some(edge),
-                Err(err) => {
-                    log::warn!("window edge: {err:#}");
-                    None
+            .and_then(|c| {
+                let compositor = conn.has_compositor();
+                let shadow = compositor && conn.wm_takes_frame_extents();
+                match crate::os::edge::Edge::new(c, shadow, compositor) {
+                    Ok(edge) => Some(edge),
+                    Err(err) => {
+                        log::warn!("window edge: {err:#}");
+                        None
+                    }
                 }
             });
         let insets = edge

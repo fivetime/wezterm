@@ -940,6 +940,15 @@ impl crate::TermWindow {
             strip.height() - layout.top_line,
         );
         self.filled_rectangle(&mut layers, 0, line, lin(stroke.unwrap_or(active)))?;
+        // Chrome's solid frame: its border line's top run, across the
+        // strip's first row (the sides and bottom are the window's own
+        // margins)
+        if self.window_state.contains(window::WindowState::SOLID_EDGE) {
+            let line = chrome_strip::frame::solid_border(frame);
+            let top = euclid::rect(strip.min_x(), strip.min_y(), strip.width(), 1.);
+            let over = chrome_strip::blend(frame, line, line.3);
+            self.filled_rectangle(&mut layers, 0, top, lin(over))?;
+        }
 
         // separators: after each tab (Chrome's trailing one; the next tab's
         // leading one stands in the same place), fading with the hovers

@@ -31,16 +31,49 @@ impl Insets {
 /// Which way a press on the margins resizes, as `ResizeEdge`.
 pub use crate::ResizeEdge as Side;
 
-/// The theme's edge, loaded.
+/// Where the edge's pictures come from.
+enum Source {
+    /// The desktop theme's, as pictures (the GTK frame).
+    Pictures {
+        focused: RgbaImage,
+        unfocused: RgbaImage,
+    },
+    /// Chrome's own frame (chrome_strip::frame), drawn as needed.
+    Chrome {
+        /// With a Material shadow around the window (the window manager
+        /// places the window by `_GTK_FRAME_EXTENTS`), else solid.
+        shadow: bool,
+        /// Round top corners (a compositor present), else square.
+        round: bool,
+    },
+}
+
+/// The window's edge, ready to draw.
 pub struct Edge {
     config: WindowEdge,
-    focused: RgbaImage,
-    unfocused: RgbaImage,
-    /// The pictures at the last scale asked for, and that scale.
-    scaled: Option<(f64, RgbaImage, RgbaImage)>,
+    source: Source,
+    /// The pictures at the last scale (and, for Chrome's frame, the last
+    /// frame colour) asked for.
+    scaled: Option<(f64, u32, RgbaImage, RgbaImage)>,
 }
 
 impl Edge {
+    /// The edge `config` asks for: Chrome's own frame with a `shadow`
+    /// where the window manager takes `_GTK_FRAME_EXTENTS` (else solid)
+    /// and `round` corners where a compositor runs; or the theme's
+    /// pictures.
+    pub fn new(config: &WindowEdge, shadow: bool, round: bool) -> anyhow::Result<Self> {
+        if config.chrome {
+            return Ok(Self {
+                config: config.clone(),
+                source: Source::Chrome { shadow, round },
+                scaled: None,
+            });
+        }
+        Self::load(config)
+    }
+
+    /// The theme's pictures.
     pub fn load(config: &WindowEdge) -> anyhow::Result<Self> {
         let focused = image::open(&config.focused)?.to_rgba8();
         let unfocused = image::open(&config.unfocused)?.to_rgba8();
@@ -50,10 +83,22 @@ impl Edge {
         );
         Ok(Self {
             config: config.clone(),
-            focused,
-            unfocused,
+            source: Source::Pictures { focused, unfocused },
             scaled: None,
         })
+    }
+
+    /// Whether the margins are outside the window as the window manager
+    /// should see it (`_GTK_FRAME_EXTENTS`): a shadow. Chrome's solid
+    /// frame is part of the window.
+    pub fn is_extents(&self) -> bool {
+        !self.is_solid()
+    }
+
+    /// Chrome's solid frame: the border line's top run crosses the
+    /// content's first row, and the top 4 DIP of the content resize.
+    pub fn is_solid(&self) -> bool {
+        matches!(self.source, Source::Chrome { shadow: false, .. })
     }
 
     /// The margins at `scale` (dpi / 96): the drawing's reach on each
@@ -63,14 +108,23 @@ impl Edge {
         if !restored {
             return Insets::default();
         }
-        let c = &self.config;
         // Chrome ceils its frame extents to pixels
-        let px = |v: f64| (v.max(c.input) * scale).ceil().clamp(0., 255.) as u16;
+        let px = |v: f64| (v * scale).ceil().clamp(0., 255.) as u16;
+        if let Source::Chrome { shadow, .. } = self.source {
+            let r = chrome_strip::frame::reach(shadow);
+            return Insets {
+                left: px(r.left.into()),
+                right: px(r.right.into()),
+                top: px(r.top.into()),
+                bottom: px(r.bottom.into()),
+            };
+        }
+        let c = &self.config;
         Insets {
-            left: px(c.left),
-            right: px(c.right),
-            top: px(c.top),
-            bottom: px(c.bottom),
+            left: px(c.left.max(c.input)),
+            right: px(c.right.max(c.input)),
+            top: px(c.top.max(c.input)),
+            bottom: px(c.bottom.max(c.input)),
         }
     }
 
@@ -117,23 +171,73 @@ impl Edge {
 
     /// The top corners' radius in pixels at `scale`.
     pub fn radius(&self, scale: f64) -> u16 {
-        (self.config.radius * scale).round().clamp(0., 64.) as u16
+        let dip = match self.source {
+            Source::Chrome { round, .. } => {
+                if round {
+                    f64::from(chrome_strip::frame::RADIUS)
+                } else {
+                    0.
+                }
+            }
+            Source::Pictures { .. } => self.config.radius,
+        };
+        (dip * scale).round().clamp(0., 64.) as u16
     }
 
-    /// The resize band's width in pixels at `scale`.
+    /// The resize band's width in pixels at `scale`: Chrome's 10 DIP on
+    /// the shadow, its solid frame's own 4.
     pub fn band(&self, scale: f64) -> u16 {
-        (self.config.input * scale).round().clamp(0., 64.) as u16
+        let dip = if self.is_solid() {
+            f64::from(chrome_strip::frame::SOLID_BORDER)
+        } else {
+            self.config.input
+        };
+        (dip * scale).round().clamp(0., 64.) as u16
     }
 
-    fn pictures(&mut self, scale: f64) -> (&RgbaImage, &RgbaImage) {
-        if self.scaled.as_ref().map(|s| s.0) != Some(scale) {
+    /// The pictures at `scale`, focused and not, the frame in `header`'s
+    /// colour where they are Chrome's own.
+    fn pictures(&mut self, scale: f64, header: [f32; 4]) -> (&RgbaImage, &RgbaImage) {
+        let key = match self.source {
+            Source::Chrome { .. } => {
+                let c = header.map(|v| (v.clamp(0., 1.) * 255.).round() as u32);
+                c[0] << 24 | c[1] << 16 | c[2] << 8 | c[3]
+            }
+            Source::Pictures { .. } => 0,
+        };
+        if self.scaled.as_ref().map(|s| (s.0, s.1)) != Some((scale, key)) {
             let side = ((4. * self.config.slice * scale).round() as u32).max(4) / 4 * 4;
-            let resize = |p: &RgbaImage| {
-                image::imageops::resize(p, side, side, image::imageops::FilterType::CatmullRom)
+            let (f, u) = match &self.source {
+                Source::Pictures { focused, unfocused } => {
+                    let resize = |p: &RgbaImage| {
+                        image::imageops::resize(
+                            p,
+                            side,
+                            side,
+                            image::imageops::FilterType::CatmullRom,
+                        )
+                    };
+                    (resize(focused), resize(unfocused))
+                }
+                Source::Chrome { shadow, round } => {
+                    let frame = chrome_strip::SrgbaTuple(header[0], header[1], header[2], 1.);
+                    let draw = |focused: bool| {
+                        let p = chrome_strip::frame::picture(
+                            self.config.slice as f32,
+                            scale as f32,
+                            focused,
+                            *shadow,
+                            *round,
+                            frame,
+                        );
+                        RgbaImage::from_raw(p.side, p.side, p.rgba).expect("a square picture")
+                    };
+                    (draw(true), draw(false))
+                }
             };
-            self.scaled = Some((scale, resize(&self.focused), resize(&self.unfocused)));
+            self.scaled = Some((scale, key, f, u));
         }
-        let (_, f, u) = self.scaled.as_ref().expect("scaled above");
+        let (_, _, f, u) = self.scaled.as_ref().expect("scaled above");
         (f, u)
     }
 
@@ -150,7 +254,7 @@ impl Edge {
         header: [f32; 4],
     ) -> Vec<u8> {
         let radius = self.radius(scale);
-        let (pf, pu) = self.pictures(scale);
+        let (pf, pu) = self.pictures(scale, header);
         let picture = if focused { pf } else { pu };
         let geometry = Geometry::new(outer, insets, picture.width(), radius);
         let (inner_w, inner_h) = geometry.inner();
@@ -184,7 +288,7 @@ impl Edge {
         header: [f32; 4],
     ) -> Vec<(u16, u16, u16, u16, Vec<u8>)> {
         let radius = self.radius(scale);
-        let (pf, pu) = self.pictures(scale);
+        let (pf, pu) = self.pictures(scale, header);
         let picture = if focused { pf } else { pu };
         let geometry = Geometry::new(outer, insets, picture.width(), radius);
         let (w, h) = outer;

@@ -45,6 +45,7 @@ glium.workspace = true
 url.workspace = true
 wezterm-bidi.workspace = true
 wezterm-color-types.workspace = true
+chrome-strip.workspace = true
 wezterm-font.workspace = true
 wezterm-input-types.workspace = true
 
