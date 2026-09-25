@@ -59,8 +59,12 @@ still shows its favicon, centred in the tab — `Tab::UpdateIconVisibility`
 `center_icon_`; the active tab at 56 shows its close button alone);
 `close_button.ink_drop_colours_opacities` (a circle of radius 8 around
 the icon, 0.16 of the colour contrasting most with the tab);
-`new_tab_button.hover_highlight` (white at 0.16 whatever the strip,
-Chrome's own quirk).
+`new_tab_button.hover_highlight` (`kColorTabStripControlButtonInkDrop`:
+the colour contrasting most with the inactive tab's background — the
+strip's, with a system theme — at 0.16; black on a light strip, white
+on a dark one; the same on the tab search button; the Material
+`kColorSysStateHeaderHover` override applies only without a custom
+theme, which a system theme is).
 
 Paint: `path.fill.geometry` (the active tab with its feet, over the
 toolbar's row); `path.highlight.geometry` (the detached pill with the
@@ -164,6 +168,9 @@ whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
   ceiled; Chrome measures the 1x asset. A shadow ending on a half DIP can
   come out 1 DIP thicker.
 - The favicon is the icon theme's terminal icon; Chrome's is the page's.
+- The tab search button's icon is two overlapping windows, not Chrome's
+  chevron: it opens the tab switcher's grid, not a menu (chosen
+  2026-09-25).
 - Chrome's own frame is drawn from a 64-DIP-slice picture cut in nine,
   so a shadow's blur is exact only up to 64 DIP from a corner; the
   shadows reach 32 at most, so nothing is lost. The solid frame's

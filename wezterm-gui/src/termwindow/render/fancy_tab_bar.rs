@@ -34,16 +34,34 @@ const X_BUTTON: &[Poly] = &[
     },
 ];
 
-/// Chrome's chevron (kExpandMoreOldIcon): a V across its box.
-const CHEVRON: &[Poly] = &[Poly {
-    path: &[
-        PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Zero),
-        PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::One),
-        PolyCommand::LineTo(BlockCoord::One, BlockCoord::Zero),
-    ],
-    intensity: BlockAlpha::Full,
-    style: PolyStyle::Outline,
-}];
+/// The tab search button's icon: two overlapping windows (the button
+/// opens the tab switcher's grid, not a menu, so not Chrome's chevron):
+/// a square in front, the back one's top and right edges behind it,
+/// across a 13-unit box.
+const TAB_SWITCHER: &[Poly] = &[
+    Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Frac(4, 13)),
+            PolyCommand::LineTo(BlockCoord::Frac(9, 13), BlockCoord::Frac(4, 13)),
+            PolyCommand::LineTo(BlockCoord::Frac(9, 13), BlockCoord::One),
+            PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::One),
+            PolyCommand::LineTo(BlockCoord::Zero, BlockCoord::Frac(4, 13)),
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::Outline,
+    },
+    Poly {
+        path: &[
+            PolyCommand::MoveTo(BlockCoord::Frac(4, 13), BlockCoord::Frac(4, 13)),
+            PolyCommand::LineTo(BlockCoord::Frac(4, 13), BlockCoord::Zero),
+            PolyCommand::LineTo(BlockCoord::One, BlockCoord::Zero),
+            PolyCommand::LineTo(BlockCoord::One, BlockCoord::Frac(9, 13)),
+            PolyCommand::LineTo(BlockCoord::Frac(9, 13), BlockCoord::Frac(9, 13)),
+        ],
+        intensity: BlockAlpha::Full,
+        style: PolyStyle::Outline,
+    },
+];
 
 const PLUS_BUTTON: &[Poly] = &[
     Poly {
@@ -171,16 +189,27 @@ impl crate::TermWindow {
                     .colors(bar_colors.clone()),
                 TabBarItem::TabSearchButton => {
                     // Chrome's tab search button: 28 round, 6 into the
-                    // region, the chevron's box where the icon has it;
-                    // white at 0.16 under the pointer, as the new-tab button
+                    // region, the glyph in a 13-DIP box centred in the
+                    // 16 icon; under the pointer the colour contrasting
+                    // most with the strip at 0.16, as the new-tab button
                     let fg = new_tab.fg_color.to_linear();
-                    let (button, chevron) = match (layout.tab_search, layout.tab_search_chevron) {
+                    let (button, icon) = match (layout.tab_search, layout.tab_search_icon) {
                         (Some(b), Some(c)) => (b, c),
                         _ => {
                             return Element::new(&font, ElementContent::Text(String::new()))
                                 .item_type(UIItemType::TabBar(TabBarItem::None));
                         }
                     };
+                    let glyph_inset = dip_px(1.5).round();
+                    let chevron = chrome_strip::Rect::new(
+                        icon.x + glyph_inset,
+                        icon.y + glyph_inset,
+                        icon.w - 2. * glyph_inset,
+                        icon.h - 2. * glyph_inset,
+                    );
+                    let hover = chrome_tabs::max_contrast(frame_colour)
+                        .to_linear()
+                        .mul_alpha(chrome_tabs::HIGHLIGHT);
                     let buttons: f32 = layout
                         .left_placed
                         .iter()
@@ -194,7 +223,7 @@ impl crate::TermWindow {
                         ElementContent::Poly {
                             line_width: metrics.underline_height.max(2),
                             poly: SizedPoly {
-                                poly: CHEVRON,
+                                poly: TAB_SWITCHER,
                                 width: Dimension::Pixels(chevron.w),
                                 height: Dimension::Pixels(chevron.h),
                             },
@@ -222,14 +251,8 @@ impl crate::TermWindow {
                         text: fg.into(),
                     })
                     .hover_colors(Some(ElementColors {
-                        border: BorderColor::new(window::color::LinearRgba::TRANSPARENT),
-                        bg: window::color::LinearRgba::with_components(
-                            1.,
-                            1.,
-                            1.,
-                            chrome_tabs::HIGHLIGHT,
-                        )
-                        .into(),
+                        border: BorderColor::new(hover),
+                        bg: hover.into(),
                         text: fg.into(),
                     }))
                 }
@@ -280,16 +303,17 @@ impl crate::TermWindow {
                         bg: window::color::LinearRgba::TRANSPARENT.into(),
                         text: fg.into(),
                     })
-                    // under the pointer: white at 0.16, whatever the strip
-                    // (Chrome contrasts against the button's transparent
-                    // background, which it takes for black)
+                    // under the pointer: the colour contrasting most with
+                    // the strip at 0.16 (kColorTabStripControlButtonInkDrop:
+                    // GetColorWithMaxContrast of the inactive tab's
+                    // background, the strip's colour with a system theme)
                     .hover_colors(Some(ElementColors {
                         border: BorderColor::new(
-                            chrome_tabs::WHITE
+                            chrome_tabs::max_contrast(frame_colour)
                                 .to_linear()
                                 .mul_alpha(chrome_tabs::HIGHLIGHT),
                         ),
-                        bg: chrome_tabs::WHITE
+                        bg: chrome_tabs::max_contrast(frame_colour)
                             .to_linear()
                             .mul_alpha(chrome_tabs::HIGHLIGHT)
                             .into(),
@@ -360,12 +384,32 @@ impl crate::TermWindow {
                             ),
                         })
                         .padding(BoxDimension {
-                            left: dip(chrome_tabs::INSET),
-                            // the close button ends 2 DIP short of the body
+                            // to the first thing shown: the favicon (at
+                            // the contents' edge, or centred in a narrow
+                            // tab), else the close button where it stands
+                            // (a narrow active tab's escapes the contents,
+                            // Center(width, 16)), else the contents' edge
+                            left: Dimension::Pixels(
+                                t.favicon
+                                    .map(|f| f.x - t.body.x)
+                                    .or_else(|| {
+                                        t.close.map(|c| {
+                                            (c.x - t.body.x).min(dip_px(chrome_tabs::INSET))
+                                        })
+                                    })
+                                    .unwrap_or(dip_px(chrome_tabs::INSET)),
+                            ),
+                            // from the last: the close button (2 DIP short
+                            // of the body), a centred favicon, else the edge
                             right: Dimension::Pixels(
-                                t.close.map_or(dip_px(chrome_tabs::INSET), |c| {
-                                    t.body.right() - c.right()
-                                }),
+                                t.close
+                                    .map(|c| t.body.right() - c.right())
+                                    .or_else(|| {
+                                        t.favicon
+                                            .filter(|_| t.favicon_centred)
+                                            .map(|f| t.body.right() - f.right())
+                                    })
+                                    .unwrap_or(dip_px(chrome_tabs::INSET)),
                             ),
                             top: dip(0.),
                             bottom: dip(0.),
