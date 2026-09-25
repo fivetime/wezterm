@@ -29,8 +29,14 @@ pub enum TabBarItem {
     None,
     LeftStatus,
     RightStatus,
-    Tab { tab_idx: usize, active: bool },
+    Tab {
+        tab_idx: usize,
+        active: bool,
+    },
     NewTabButton,
+    /// Chrome's tab search button before the tabs (the Chrome strip
+    /// only): it opens the tab switcher.
+    TabSearchButton,
     WindowButton(IntegratedTitleButton),
 }
 
@@ -554,6 +560,17 @@ impl TabBarState {
             });
             x += left_status_line.len();
             line.append_line(left_status_line, SEQ_ZERO);
+        }
+
+        if config.tab_strip_style == config::TabStripStyle::Chrome {
+            // Chrome's tab search button, before the tabs (drawn by the
+            // fancy bar from the strip's layout; no cells here)
+            items.push(TabEntry {
+                item: TabBarItem::TabSearchButton,
+                title: Line::with_width(0, SEQ_ZERO),
+                x,
+                width: 0,
+            });
         }
 
         for (tab_idx, tab_title) in tab_titles.iter().enumerate() {

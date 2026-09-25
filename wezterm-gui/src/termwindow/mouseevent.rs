@@ -624,6 +624,12 @@ impl super::TermWindow {
                 TabBarItem::NewTabButton { .. } => {
                     self.do_new_tab_button_click(MousePress::Left);
                 }
+                TabBarItem::TabSearchButton => {
+                    // Chrome's tab search: here the tab switcher, on the
+                    // tab that is active, until a pick or a click away
+                    let modal = crate::termwindow::tabswitcher::TabSwitcher::new(self, 0);
+                    self.set_modal(Rc::new(modal));
+                }
                 TabBarItem::None | TabBarItem::LeftStatus | TabBarItem::RightStatus => {
                     let maximized = self
                         .window_state
@@ -677,6 +683,7 @@ impl super::TermWindow {
                 TabBarItem::None
                 | TabBarItem::LeftStatus
                 | TabBarItem::RightStatus
+                | TabBarItem::TabSearchButton
                 | TabBarItem::WindowButton(_) => {}
             },
             WMEK::Press(MousePress::Right) => match item {
@@ -689,6 +696,7 @@ impl super::TermWindow {
                 TabBarItem::None
                 | TabBarItem::LeftStatus
                 | TabBarItem::RightStatus
+                | TabBarItem::TabSearchButton
                 | TabBarItem::WindowButton(_) => {}
             },
             WMEK::Move => match item {
@@ -707,6 +715,7 @@ impl super::TermWindow {
                 }
                 TabBarItem::WindowButton(_)
                 | TabBarItem::Tab { .. }
+                | TabBarItem::TabSearchButton
                 | TabBarItem::NewTabButton { .. } => {}
             },
             WMEK::VertWheel(n) => {

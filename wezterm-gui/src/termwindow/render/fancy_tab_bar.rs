@@ -34,6 +34,17 @@ const X_BUTTON: &[Poly] = &[
     },
 ];
 
+/// Chrome's chevron (kExpandMoreOldIcon): a V across its box.
+const CHEVRON: &[Poly] = &[Poly {
+    path: &[
+        PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Zero),
+        PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::One),
+        PolyCommand::LineTo(BlockCoord::One, BlockCoord::Zero),
+    ],
+    intensity: BlockAlpha::Full,
+    style: PolyStyle::Outline,
+}];
+
 const PLUS_BUTTON: &[Poly] = &[
     Poly {
         path: &[
@@ -158,6 +169,70 @@ impl crate::TermWindow {
                     })
                     .border(BoxDimension::new(Dimension::Pixels(0.)))
                     .colors(bar_colors.clone()),
+                TabBarItem::TabSearchButton => {
+                    // Chrome's tab search button: 28 round, 6 into the
+                    // region, the chevron's box where the icon has it;
+                    // white at 0.16 under the pointer, as the new-tab button
+                    let fg = new_tab.fg_color.to_linear();
+                    let (button, chevron) = match (layout.tab_search, layout.tab_search_chevron) {
+                        (Some(b), Some(c)) => (b, c),
+                        _ => {
+                            return Element::new(&font, ElementContent::Text(String::new()))
+                                .item_type(UIItemType::TabBar(TabBarItem::None));
+                        }
+                    };
+                    let buttons: f32 = layout
+                        .left_placed
+                        .iter()
+                        .map(|b| b.width + b.margin_left + b.margin_right)
+                        .sum();
+                    let pad_x = ((button.w - chevron.w) / 2. - 1.).max(0.).floor();
+                    let pad_top = (chevron.y - button.y - 1.).max(0.).round();
+                    let pad_bottom = (button.h - 2. - chevron.h - pad_top).max(0.);
+                    Element::new(
+                        &font,
+                        ElementContent::Poly {
+                            line_width: metrics.underline_height.max(2),
+                            poly: SizedPoly {
+                                poly: CHEVRON,
+                                width: Dimension::Pixels(chevron.w),
+                                height: Dimension::Pixels(chevron.h),
+                            },
+                        },
+                    )
+                    .vertical_align(VerticalAlign::Top)
+                    .item_type(UIItemType::TabBar(item.item.clone()))
+                    .margin(BoxDimension {
+                        left: Dimension::Pixels((button.x - buttons).max(0.)),
+                        right: dip(0.),
+                        top: Dimension::Pixels(button.y),
+                        bottom: Dimension::Pixels(layout.height - button.y - button.h),
+                    })
+                    .padding(BoxDimension {
+                        left: Dimension::Pixels(pad_x),
+                        right: Dimension::Pixels(pad_x),
+                        top: Dimension::Pixels(pad_top),
+                        bottom: Dimension::Pixels(pad_bottom),
+                    })
+                    .border(BoxDimension::new(Dimension::Pixels(1.)))
+                    .border_corners(Some(chrome_circle(button.w / 2.)))
+                    .colors(ElementColors {
+                        border: BorderColor::new(window::color::LinearRgba::TRANSPARENT),
+                        bg: window::color::LinearRgba::TRANSPARENT.into(),
+                        text: fg.into(),
+                    })
+                    .hover_colors(Some(ElementColors {
+                        border: BorderColor::new(window::color::LinearRgba::TRANSPARENT),
+                        bg: window::color::LinearRgba::with_components(
+                            1.,
+                            1.,
+                            1.,
+                            chrome_tabs::HIGHLIGHT,
+                        )
+                        .into(),
+                        text: fg.into(),
+                    }))
+                }
                 TabBarItem::NewTabButton if chrome => {
                     let fg = new_tab.fg_color.to_linear();
                     Element::new(
@@ -521,6 +596,7 @@ impl crate::TermWindow {
             .iter()
             .map(|item| match item.item {
                 TabBarItem::NewTabButton | TabBarItem::Tab { .. } => 1.,
+                TabBarItem::TabSearchButton => 0.,
                 _ => 0.,
             })
             .sum();
@@ -551,6 +627,11 @@ impl crate::TermWindow {
         for item in items {
             match item.item {
                 TabBarItem::LeftStatus => left_status.push(item_to_elem(item)),
+                TabBarItem::TabSearchButton => {
+                    if chrome {
+                        left_eles.push(item_to_elem(item));
+                    }
+                }
                 TabBarItem::None | TabBarItem::RightStatus => right_eles.push(item_to_elem(item)),
                 TabBarItem::WindowButton(button) => {
                     if left_buttons.contains(&button) {
@@ -573,11 +654,13 @@ impl crate::TermWindow {
                             .iter()
                             .map(|b| b.width + b.margin_left + b.margin_right)
                             .sum();
+                        // (or after the tab search button, when it stands there)
+                        let before = layout.tab_search.map_or(buttons, |b| b.right());
                         let body = layout.tabs.first().map_or(0., |t| t.body.x);
                         left_eles.push(
                             Element::new(&font, ElementContent::Text(String::new())).min_width(
                                 Some(Dimension::Pixels(
-                                    (body - buttons - dip_px(chrome_tabs::GAP / 2.)).max(0.),
+                                    (body - before - dip_px(chrome_tabs::GAP / 2.)).max(0.),
                                 )),
                             ),
                         );
@@ -856,6 +939,7 @@ impl crate::TermWindow {
             // WezTerm's own drawn buttons, when the desktop gave none
             drawn_buttons: if images.is_empty() { 138. } else { 0. },
             close_buttons: self.config.show_close_tab_button_in_tabs,
+            tab_search: true,
             favicons: self.config.tab_icon.is_some(),
             font: chrome_strip::FontMetrics {
                 ascent: (fm.cell_height.get() + fm.descender.get()) as f32,

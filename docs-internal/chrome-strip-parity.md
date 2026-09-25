@@ -36,7 +36,9 @@ of 12 and their margin; the trailing buttons' bounds plus the caption
 margin); `ntb.position` (6 past the last tab, 6 down the strip) and
 `ntb.button_size` 28 with its 16 icon and 14 radius; `region.grab_handle`
 (42 DIP kept free after the new-tab button, before the caption buttons,
-however full the strip: room to drag the window by); `px.scale_and_align_bounds` for the
+however full the strip: room to drag the window by);
+`tab_search.leading_button` (28 round, 6 into the region, the tabs' strip
+28 past the region's start; the 16 chevron of `kExpandMoreOldIcon`); `px.scale_and_align_bounds` for the
 body's pixel edges; the hit test's 3-DIP reach into the separators and
 its rise to the top when maximized; `layout.overflow` (the tabs never
 narrower than their minimums: a tab past the strip's trailing edge is
@@ -138,9 +140,9 @@ whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
 
 ## Left out, on purpose
 
-- The tab search button at the strip's leading end (`TabStripComboButton`,
-  its `kActionTabSearch` button; the Tab Search bubble it opens is a
-  WebUI page: a search box, the open tabs, the recently closed ones).
+- The Tab Search bubble (a WebUI page: a search box, the open tabs, the
+  recently closed ones): the strip's tab search button opens the tab
+  switcher (the Ctrl+Tab grid) instead.
 
 - Pinned tabs, tab groups, split tabs, the tab search button and tab
   scrolling: a terminal has none of them.

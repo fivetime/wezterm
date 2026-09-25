@@ -75,6 +75,14 @@ pub const NEW_TAB_BUTTON: f32 = 28.;
 pub const NEW_TAB_ICON: f32 = 16.;
 pub const NEW_TAB_AFTER_TABS: f32 = 6.;
 pub const NEW_TAB_ROOM: f32 = NEW_TAB_BUTTON + NEW_TAB_AFTER_TABS;
+/// The tab search button at the strip's leading end (TabStripComboButton's
+/// kActionTabSearch button, a TabStripFlatEdgeButton): 28 square, 6 in
+/// from the region's edge (AdjustViewBoundsRect: the strip's x + 12 - 6 -
+/// 28, the strip's left margin being 28), its chevron icon 16
+/// (kExpandMoreOldIcon: a 8.6 x 4.3 chevron at (3.7, 6.44) of the 16).
+pub const TAB_SEARCH_BUTTON: f32 = 28.;
+pub const TAB_SEARCH_INSET: f32 = 6.;
+pub const TAB_SEARCH_CHEVRON: (f32, f32, f32, f32) = (3.7, 6.44, 8.6, 4.3);
 /// The room kept free after the new-tab button, before the caption
 /// buttons, for grabbing the frame by however full the strip is
 /// (HorizontalTabStripRegionView's FrameGrabHandle: 42 x 0 preferred,
@@ -163,6 +171,9 @@ pub struct Inputs {
     pub drawn_buttons: f32,
     pub close_buttons: bool,
     pub favicons: bool,
+    /// The tab search button before the tabs (Chrome's, on every normal
+    /// window).
+    pub tab_search: bool,
     pub font: FontMetrics,
 }
 
@@ -178,6 +189,7 @@ impl Default for Inputs {
             drawn_buttons: 0.,
             close_buttons: true,
             favicons: true,
+            tab_search: false,
             font: FontMetrics {
                 ascent: 17.4,
                 descent: 4.3,
@@ -379,6 +391,10 @@ pub struct Layout {
     /// The new-tab button (a 28 circle) and its icon.
     pub new_tab: Rect,
     pub new_tab_icon: Rect,
+    /// The tab search button and its chevron (the icon's own box), when
+    /// asked for.
+    pub tab_search: Option<Rect>,
+    pub tab_search_chevron: Option<Rect>,
     /// The caption buttons placed.
     pub left_placed: Vec<PlacedButton>,
     pub right_placed: Vec<PlacedButton>,
@@ -419,6 +435,32 @@ impl Layout {
             0.
         } else {
             leading - leading_margin + leading_margin.max(LEADING_MARGIN)
+        };
+        // the tab search button 6 into the region, the tabs' strip 28
+        // past its start (Chrome's strip margin for it)
+        let (tab_search, tab_search_chevron) = if inputs.tab_search {
+            let b = Rect::new(
+                d(region_left + TAB_SEARCH_INSET),
+                d(TAB_TOP),
+                d(TAB_SEARCH_BUTTON),
+                d(TAB_SEARCH_BUTTON),
+            );
+            let icon = (TAB_SEARCH_BUTTON - NEW_TAB_ICON) / 2.;
+            let (cx, cy, cw, ch) = TAB_SEARCH_CHEVRON;
+            let c = Rect::new(
+                d(region_left + TAB_SEARCH_INSET + icon + cx),
+                d(TAB_TOP + icon + cy),
+                d(cw),
+                d(ch),
+            );
+            (Some(b), Some(c))
+        } else {
+            (None, None)
+        };
+        let region_left = if inputs.tab_search {
+            region_left + TAB_SEARCH_BUTTON
+        } else {
+            region_left
         };
         // (the first trailing button's own left margin lies outside the
         // buttons' bounds; the caption margin, its right margin, is added)
@@ -590,6 +632,8 @@ impl Layout {
                 d(NEW_TAB_ICON),
             ),
             new_tab,
+            tab_search,
+            tab_search_chevron,
             left_placed,
             right_placed,
         }
@@ -1102,6 +1146,42 @@ mod tests {
         assert_eq!(t.favicon.map(|f| f.x), Some(t.bounds_dip.x + 8.));
         assert_eq!(t.title_width, 0.);
         assert!(t.close.is_none());
+    }
+
+    #[test]
+    fn the_tab_search_button_before_the_tabs() {
+        let l = Layout::compute(&Inputs {
+            tabs: 2,
+            tab_search: true,
+            ..Inputs::default()
+        });
+        // 6 into the region, 28 square, on the tabs' row
+        assert_eq!(l.tab_search, Some(Rect::new(6., 6., 28., 28.)));
+        // the tabs' strip 28 past the region's start: the first body at 40
+        assert_eq!(l.tabs[0].bounds_dip.x, 28.);
+        assert_eq!(l.tabs[0].body.x, 40.);
+        // the chevron in the 16 icon centred in the button, on whole pixels
+        assert_eq!(l.tab_search_chevron, Some(Rect::new(16., 18., 9., 4.)));
+        // past leading caption buttons the same 6 in
+        let l = Layout::compute(&Inputs {
+            tabs: 2,
+            tab_search: true,
+            left_buttons: vec![ButtonImage {
+                width: 24.,
+                height: 24.,
+                margin_left: 8.,
+                margin_right: 2.,
+                ..ButtonImage::default()
+            }],
+            ..Inputs::default()
+        });
+        assert_eq!(l.tab_search.map(|r| r.x), Some(34. + 12. - 2. + 6.));
+        let none = Layout::compute(&Inputs {
+            tabs: 2,
+            ..Inputs::default()
+        });
+        assert_eq!(none.tab_search, None);
+        assert_eq!(none.tabs[0].bounds_dip.x, 0.);
     }
 
     #[test]
