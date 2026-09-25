@@ -38,7 +38,12 @@ margin); `ntb.position` (6 past the last tab, 6 down the strip) and
 (42 DIP kept free after the new-tab button, before the caption buttons,
 however full the strip: room to drag the window by); `px.scale_and_align_bounds` for the
 body's pixel edges; the hit test's 3-DIP reach into the separators and
-its rise to the top when maximized.
+its rise to the top when maximized; `layout.overflow` (the tabs never
+narrower than their minimums: a tab past the strip's trailing edge is
+hidden whole, as is one before the active tab that would be past it were
+it the active one — `TabContainerImpl::ShouldTabBeVisible`; Chrome has no
+tab strip scrolling in this tree; the new-tab button then sits 6 past the
+strip's own edge).
 
 Contents: `favicon.size` 16 at the contents' corner (rows 12..28);
 `tab.pre_title_padding` 8; `title.bounds` (8 before the close icon);
@@ -47,6 +52,9 @@ over the 41-DIP tab; the font's whole height when it has no cap height);
 `close_button.position` (icon 16 from the contents' right, button 28
 around it, top 6); `close_button.show_rules` (the active tab always, an
 inactive one with 68 of contents room, nothing under 32 wide);
+`favicon.centred_when_alone` (an inactive tab with room for nothing else
+still shows its favicon, centred in the tab — `Tab::UpdateIconVisibility`
+`center_icon_`; the active tab at 56 shows its close button alone);
 `close_button.ink_drop_colours_opacities` (a circle of radius 8 around
 the icon, 0.16 of the colour contrasting most with the tab);
 `new_tab_button.hover_highlight` (white at 0.16 whatever the strip,
@@ -129,6 +137,10 @@ whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
 (ceiled ascent, descent and cap height).
 
 ## Left out, on purpose
+
+- The tab search button at the strip's leading end (`TabStripComboButton`,
+  its `kActionTabSearch` button; the Tab Search bubble it opens is a
+  WebUI page: a search box, the open tabs, the recently closed ones).
 
 - Pinned tabs, tab groups, split tabs, the tab search button and tab
   scrolling: a terminal has none of them.

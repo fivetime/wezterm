@@ -341,7 +341,13 @@ pub struct Tab {
     /// radius.
     pub highlight: Rect,
     pub radius: f32,
-    /// The favicon, when shown.
+    /// Whether the tab shows at all: Chrome hides a tab clipped by the
+    /// strip's trailing edge, and one before the active tab that would
+    /// be clipped were it activated (TabContainerImpl::ShouldTabBeVisible);
+    /// the tabs never shrink below their minimum widths to fit.
+    pub visible: bool,
+    /// The favicon, when shown: at the contents' left, or centred in a
+    /// tab too narrow for anything else (tab.cc center_icon_).
     pub favicon: Option<Rect>,
     /// The title's left edge and width, and its top so the baseline lies
     /// where Chrome's label puts it.
@@ -445,9 +451,11 @@ impl Layout {
             let body_right = ((x + w - FOOT - 2.) * scale).round() + 2. * scale;
             let body = Rect::new(body_left, tab_top, body_right - body_left, tab_height);
             let radius = top_radius_for_width(w) * scale;
-            // what the tab shows (tab.cc UpdateIconVisibility)
-            let (favicon_shown, close_shown) = if w < TAB_MIN_INACTIVE {
-                (false, false)
+            // what the tab shows (tab.cc UpdateIconVisibility): an inactive
+            // tab with room for nothing else still shows its favicon,
+            // centred in the tab
+            let (favicon_shown, close_shown, favicon_centred) = if w < TAB_MIN_INACTIVE {
+                (false, false, false)
             } else {
                 let mut avail = w - 2. * CONTENT_INSET;
                 if active {
@@ -455,17 +463,27 @@ impl Layout {
                     if close {
                         avail -= CLOSE_ICON + AFTER_TITLE;
                     }
-                    (inputs.favicons && avail >= FAVICON, close)
+                    (inputs.favicons && avail >= FAVICON, close, false)
                 } else {
                     let favicon = inputs.favicons && avail >= FAVICON;
-                    (favicon, inputs.close_buttons && avail >= CLOSE_ROOM)
+                    let close = inputs.close_buttons && avail >= CLOSE_ROOM;
+                    if !favicon && !close && inputs.favicons {
+                        (true, false, true)
+                    } else {
+                        (favicon, close, false)
+                    }
                 }
             };
             let contents_left = x + CONTENT_INSET;
             let contents_right = x + w - CONTENT_INSET;
             let favicon = favicon_shown.then(|| {
+                let left = if favicon_centred {
+                    x + center(w, FAVICON)
+                } else {
+                    contents_left
+                };
                 Rect::new(
-                    d(contents_left),
+                    d(left),
                     d(STRIP_HEIGHT - HIGHLIGHT_HEIGHT - 1.),
                     d(FAVICON),
                     d(FAVICON),
@@ -491,7 +509,9 @@ impl Layout {
             } else {
                 (None, None)
             };
-            let title_left = if favicon_shown {
+            let title_left = if favicon_centred {
+                x + center(w, FAVICON) + FAVICON + FAVICON_GAP
+            } else if favicon_shown {
                 contents_left + FAVICON + FAVICON_GAP
             } else {
                 contents_left
@@ -505,6 +525,7 @@ impl Layout {
             let separator = |sx: f32| Rect::new(d(sx), separator_y, d(SEPARATOR.0), d(SEPARATOR.1));
             tabs.push(Tab {
                 bounds_dip,
+                visible: true,
                 body,
                 shape: Rect::new(
                     body_left - d(FOOT),
@@ -530,7 +551,23 @@ impl Layout {
             });
             x += w - TAB_OVERLAP;
         }
-        let tabs_right = tabs.last().map_or(region_left, |t| t.bounds_dip.right());
+        // the tabs the strip has room for (TabContainerImpl::ShouldTabBeVisible):
+        // one past the strip's trailing edge is hidden whole, as is one
+        // before the active tab that would be past it were it the active
+        // one (wider by the difference)
+        let strip_right = region_left + available;
+        let active_w = widths.get(inputs.active).copied().unwrap_or(0.);
+        for (i, t) in tabs.iter_mut().enumerate() {
+            let right = t.bounds_dip.right();
+            t.visible = right <= strip_right
+                && (inputs.active <= i || right + active_w - t.bounds_dip.w <= strip_right);
+        }
+        // the new-tab button after the strip: its bounds end where the
+        // tabs do, or at its allotted width when they run past it
+        let tabs_right = tabs
+            .last()
+            .map_or(region_left, |t| t.bounds_dip.right())
+            .min(strip_right);
         let new_tab = Rect::new(
             d(tabs_right - FOOT + NEW_TAB_AFTER_TABS),
             tab_top,
@@ -569,7 +606,7 @@ impl Layout {
         let reach = dip(3., self.scale);
         self.tabs
             .iter()
-            .position(|t| x >= t.body.x - reach && x < t.body.right() + reach)
+            .position(|t| t.visible && x >= t.body.x - reach && x < t.body.right() + reach)
     }
 }
 
@@ -1017,6 +1054,57 @@ mod tests {
     }
 
     #[test]
+    fn tabs_past_the_strip_are_hidden_whole() {
+        // 60 tabs in a 600-px window (no caption buttons: the region runs
+        // from 12 to the edge): at their minimum widths they run past the
+        // strip; Chrome shows those that fit and hides the rest
+        let l = Layout::compute(&Inputs {
+            tabs: 60,
+            width_px: 600.,
+            active: 59,
+            ..Inputs::default()
+        });
+        let strip_right = 600. - 34. - 42.;
+        let shown: Vec<&Tab> = l.tabs.iter().filter(|t| t.visible).collect();
+        assert!(shown.len() < 60 && shown.len() > 20, "{}", shown.len());
+        assert!(shown.iter().all(|t| t.bounds_dip.right() <= strip_right));
+        assert!(
+            !l.tabs[59].visible,
+            "the active tab past the edge is hidden too"
+        );
+        assert_eq!(
+            l.tabs[0].bounds_dip.w, 32.,
+            "never narrower than the minimum"
+        );
+        // the new-tab button sits 6 past the strip's own edge, not the tabs'
+        assert_eq!(l.new_tab.x, strip_right - 12. + 6.);
+        // a tab before the active one that would be clipped when activated
+        // (24 wider) is hidden, though it fits as it is
+        let last_fit = l
+            .tabs
+            .iter()
+            .rposition(|t| t.bounds_dip.right() <= strip_right)
+            .unwrap();
+        let last_shown = l.tabs.iter().rposition(|t| t.visible).unwrap();
+        assert!(last_shown <= last_fit);
+        assert_eq!(
+            l.tabs[last_fit].visible,
+            l.tabs[last_fit].bounds_dip.right() + 56. - 32. <= strip_right,
+        );
+        assert_eq!(
+            l.tab_at(l.tabs[59].body.x + 1., 20., false),
+            None,
+            "no hit on a hidden tab"
+        );
+        // a narrow inactive tab shows its favicon centred, nothing else
+        let t = &l.tabs[1];
+        assert_eq!(t.bounds_dip.w, 32.);
+        assert_eq!(t.favicon.map(|f| f.x), Some(t.bounds_dip.x + 8.));
+        assert_eq!(t.title_width, 0.);
+        assert!(t.close.is_none());
+    }
+
+    #[test]
     fn narrow_tabs_lose_their_close_buttons_and_corners() {
         // 40 tabs in 600 px: inactive tabs at 32, the active at 56
         let l = Layout::compute(&Inputs {
@@ -1035,7 +1123,11 @@ mod tests {
             l.tabs[3].close.is_some(),
             "the active tab keeps its close button"
         );
-        assert_eq!(l.tabs[0].favicon, None, "32 wide: nothing but the tab");
+        assert_eq!(
+            l.tabs[0].favicon.map(|f| f.x),
+            Some(8.),
+            "32 wide: the favicon alone, centred"
+        );
         assert_eq!(
             top_radius_for_width(32.),
             4.,

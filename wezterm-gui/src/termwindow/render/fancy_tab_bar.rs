@@ -180,7 +180,11 @@ impl crate::TermWindow {
                     .margin(BoxDimension {
                         left: Dimension::Pixels(
                             layout.new_tab.x
-                                - layout.tabs.last().map_or(0., |t| t.body.right())
+                                - layout
+                                    .tabs
+                                    .iter()
+                                    .rfind(|t| t.visible)
+                                    .map_or(0., |t| t.body.right())
                                 - chrome_strip::dip(chrome_tabs::GAP / 2., scale),
                         ),
                         right: dip(0.),
@@ -581,6 +585,10 @@ impl crate::TermWindow {
                     first_tab = false;
                     let t = layout.tabs.get(tab_no).cloned();
                     tab_no += 1;
+                    // a tab the strip has no room for is not drawn at all
+                    if chrome && t.as_ref().is_some_and(|t| !t.visible) {
+                        continue;
+                    }
                     let mut elem = item_to_elem(item);
                     elem.max_width = Some(Dimension::Pixels(match &t {
                         Some(t) if chrome => t.body.w,
@@ -894,9 +902,10 @@ impl crate::TermWindow {
         let font = self.fonts.title_font()?;
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
         let layout = self.chrome_layout(&font, &metrics)?;
-        // the bodies as the elements were laid out, each with its own
-        // numbers from the layout
+        // the bodies as the elements were laid out (the shown tabs, in
+        // order), each with its own numbers from the layout
         let bodies = chrome_tabs::tabs(computed);
+        let shown: Vec<&chrome_strip::Tab> = layout.tabs.iter().filter(|t| t.visible).collect();
         let condensed = self.window_state.contains(window::WindowState::MAXIMIZED);
         let mouse = self
             .current_mouse_event
@@ -969,7 +978,7 @@ impl crate::TermWindow {
             if opacity <= 0. {
                 continue;
             }
-            let Some(t) = layout.tabs.get(i) else { break };
+            let Some(t) = shown.get(i) else { break };
             let s = t.trailing_separator;
             self.tab_shape_quad(
                 &mut layers,
@@ -997,7 +1006,7 @@ impl crate::TermWindow {
             if *is_active || values[i] <= 0. {
                 continue;
             }
-            let Some(t) = layout.tabs.get(i) else { break };
+            let Some(t) = shown.get(i) else { break };
             let fill = chrome_tabs::hover_fill(theme_hover, frame, focused);
             let colour = chrome_tabs::hover_at(fill, frame, values[i]);
             self.tab_shape_quad(
