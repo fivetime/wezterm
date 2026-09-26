@@ -538,7 +538,7 @@ impl FadeClip {
     /// The text's opacity at `x`
     fn alpha(&self, x: f32) -> f32 {
         let start = self.right - self.fade.width;
-        if x <= start {
+        if x <= start || self.fade.width <= 0. {
             1.
         } else {
             let t = ((x - start) / self.fade.width).min(1.);
@@ -923,10 +923,20 @@ impl super::TermWindow {
 
                 computed_kids.sort_by(|a, b| a.zindex.cmp(&b.zindex));
 
-                let fade = element
-                    .fade_tail
-                    .filter(|_| max_x > max_width + 0.5)
-                    .and_then(|char_width| Fade::new(char_width, max_width));
+                // overflowing text is always cut at the edge; too narrow a
+                // room for a fade (a third of it rounds to nothing), it is
+                // cut without one, and none shows in no room at all, as
+                // Chrome's title label is drawn only within its bounds
+                let fade =
+                    element
+                        .fade_tail
+                        .filter(|_| max_x > max_width + 0.5)
+                        .map(|char_width| {
+                            Fade::new(char_width, max_width).unwrap_or(Fade {
+                                width: 0.,
+                                end_alpha: 1.,
+                            })
+                        });
                 let content_rect = euclid::rect(0., 0., max_x.min(max_width), pixel_height);
                 let rects = element.compute_rects(context, content_rect);
 
