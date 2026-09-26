@@ -233,6 +233,27 @@ pub struct MappedQuads<'a> {
 }
 
 impl<'a> MappedQuads<'a> {
+    /// How many quads this frame has so far
+    pub fn quads(&self) -> usize {
+        *self.next
+    }
+
+    /// Multiplies the alpha of the quads from `from` on by `opacity`. A
+    /// text glyph's mode takes its alpha from the texture alone, so its
+    /// quads become grayscale masks, whose shader multiplies the colour's
+    /// alpha in (the same pixels at full opacity).
+    pub fn fade_from(&mut self, from: usize, opacity: f32) {
+        let end = (*self.next * VERTICES_PER_CELL).min(self.shadow.len());
+        let start = (from * VERTICES_PER_CELL).min(end);
+        for v in &mut self.shadow[start..end] {
+            if v.has_color == IS_GLYPH {
+                v.has_color = IS_GRAY_SCALE;
+            }
+            v.fg_color[3] *= opacity;
+            v.alt_color[3] *= opacity;
+        }
+    }
+
     /// Makes room for `quads` more quads: running past what the GPU
     /// buffers hold only grows this array, and the buffers grow when it
     /// is uploaded (`TripleVertexBuffer::upload`), rather than the frame

@@ -403,6 +403,10 @@ pub struct TermWindow {
     fancy_tab_bar: Option<box_model::ComputedElement>,
     /// The tab the pointer rests on, and its card (see `hover_card`)
     tab_hover_card: Option<render::hover_card::TabHoverCard>,
+    /// The card last shown, fading out, and since when
+    hover_card_leaving: Option<(Instant, box_model::ComputedElement)>,
+    /// When a card was last taken away (one shows again at once soon after)
+    hover_card_left_at: Option<Instant>,
     /// The Chrome strip's hover animations.
     chrome_hover: RefCell<render::fancy_tab_bar::ChromeHover>,
     pub right_status: String,
@@ -573,6 +577,7 @@ impl TermWindow {
                 self.cancel_modal();
             }
             self.tab_hover_card = None;
+            self.hover_card_leaving = None;
         }
 
         // Reset the cursor blink phase
@@ -750,6 +755,8 @@ impl TermWindow {
             tab_bar: TabBarState::default(),
             fancy_tab_bar: None,
             tab_hover_card: None,
+            hover_card_leaving: None,
+            hover_card_left_at: None,
             chrome_hover: RefCell::new(render::fancy_tab_bar::ChromeHover::default()),
             right_status: String::new(),
             left_status: String::new(),

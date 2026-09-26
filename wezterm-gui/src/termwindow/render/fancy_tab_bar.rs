@@ -88,7 +88,9 @@ impl crate::TermWindow {
         // (the hover card's layout holds glyphs of the same atlas)
         if let Some(card) = self.tab_hover_card.as_mut() {
             card.computed = None;
+            card.slide = None;
         }
+        self.hover_card_leaving = None;
     }
 
     pub fn build_fancy_tab_bar(&self, palette: &ColorPalette) -> anyhow::Result<ComputedElement> {

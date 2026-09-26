@@ -35,6 +35,58 @@ const WAIT: Duration = Duration::from_millis(1000);
 const WIDTH: f32 = chrome_strip::HOVER_CARD_WIDTH;
 const LINES: usize = 6;
 
+/// Chrome's card animations (TabHoverCardController, with
+/// views::WidgetFadeAnimator's and BubbleSlideAnimator's defaults): the
+/// first card fades in over 200 ms, a card taken away fades out over
+/// 150 ms, and a card moving to another tab slides there over 200 ms
+/// (kHoverCardSlideDuration) while its text crossfades, all eased
+/// FAST_OUT_SLOW_IN. (The fades also slide only with the tab strip
+/// "declutter" features, off by default.)
+const FADE_IN: Duration = Duration::from_millis(200);
+const FADE_OUT: Duration = Duration::from_millis(150);
+const SLIDE: Duration = Duration::from_millis(200);
+/// A card taken away less than this long ago shows again at once, and
+/// without fading in (ShouldShowImmediately's kShowWithoutDelayTimeBuffer)
+const SHOW_AGAIN: Duration = Duration::from_millis(300);
+
+/// gfx::Tween::FAST_OUT_SLOW_IN: cubic-bezier(0.4, 0, 0.2, 1) at `t`
+pub(crate) fn fast_out_slow_in(t: f32) -> f32 {
+    cubic_bezier((0.4, 0.), (0.2, 1.), t)
+}
+
+/// The CSS-style cubic Bezier easing through (0,0), `p1`, `p2`, (1,1) at
+/// progress `t` (gfx::CubicBezier::Solve): the curve's x solved for `t`,
+/// its y there.
+fn cubic_bezier(p1: (f32, f32), p2: (f32, f32), t: f32) -> f32 {
+    let t = t.clamp(0., 1.);
+    let curve = |a: f32, b: f32, s: f32| {
+        let r = 1. - s;
+        3. * a * r * r * s + 3. * b * r * s * s + s * s * s
+    };
+    let (mut lo, mut hi, mut s) = (0f32, 1f32, t);
+    for _ in 0..40 {
+        let x = curve(p1.0, p2.0, s);
+        if (x - t).abs() < 1e-6 {
+            break;
+        }
+        if x < t {
+            lo = s;
+        } else {
+            hi = s;
+        }
+        s = (lo + hi) / 2.;
+    }
+    curve(p1.1, p2.1, s)
+}
+
+/// A card sliding from where the previous one was to its own tab.
+pub(crate) struct Slide {
+    /// The previous card, where it was
+    previous: ComputedElement,
+    /// Since when (the new card's first frame)
+    since: Option<Instant>,
+}
+
 /// The configuration's answer: `None` for the tab's own card (no handler,
 /// or nil), `Some(None)` for no card, else the title and the note.
 type Answer = Option<Option<(String, String)>>;
@@ -49,6 +101,12 @@ pub struct TabHoverCard {
     answer: Option<Answer>,
     /// Once built: what it shows, or `None` for no card.
     content: Option<Option<Content>>,
+    /// Whether it fades in (the first card, not one following another)
+    fades_in: bool,
+    /// Its first frame
+    shown_at: Option<Instant>,
+    /// Sliding from the card before it
+    pub(crate) slide: Option<Slide>,
     /// Once laid out: the card, for where its tab is and the window's
     /// size and dpi. Laying it out shapes its text and builds its shadow
     /// rings; a repaint while it shows (output, the cursor's blink) draws
@@ -148,15 +206,16 @@ pub(crate) fn shadowed(
 
 impl crate::TermWindow {
     /// The pointer moved: over the tab `tab` (its body or close button),
-    /// or not over a tab. A card waits `DELAY` on a new tab; a press or
-    /// leaving takes it away.
+    /// or not over a tab. A card waits `DELAY` on a new tab, unless one
+    /// shows (or did a moment ago): then the card moves to the new tab at
+    /// once; a press or leaving takes it away.
     pub fn hover_tab(&mut self, tab: Option<usize>, pressed: bool) {
         if !self.config.show_tab_hover_cards || pressed {
-            self.tab_hover_card = None;
+            self.hide_hover_card();
             return;
         }
         let Some(idx) = tab else {
-            self.tab_hover_card = None;
+            self.hide_hover_card();
             return;
         };
         if self
@@ -166,17 +225,35 @@ impl crate::TermWindow {
         {
             return;
         }
-        self.tab_hover_card = None;
+        // the card showing now, which the new one slides from
+        let previous = self.tab_hover_card.take().and_then(|c| match c {
+            TabHoverCard {
+                shown_at: Some(_),
+                computed: Some((_, computed)),
+                ..
+            } => Some(computed),
+            // (itself still waiting for its content: what it slides from)
+            TabHoverCard { slide, .. } => slide.map(|s| s.previous),
+        });
+        let recently = self
+            .hover_card_left_at
+            .is_some_and(|at| at.elapsed() <= SHOW_AGAIN);
+        let immediate = previous.is_some() || recently;
         let Some((tab_id, pane_id)) = Mux::get()
             .get_window(self.mux_window_id)
             .and_then(|w| w.get_tab_at_idx(idx).cloned())
             .and_then(|t| Some((t.tab_id(), t.get_active_pane()?.pane_id())))
         else {
+            if let Some(previous) = previous {
+                self.hover_card_leaving = Some((Instant::now(), previous));
+            }
             return;
         };
         let since = Instant::now();
         // Chrome waits by the widest tab in the strip
-        let delay = if self.config.tab_strip_style == config::TabStripStyle::Chrome {
+        let delay = if immediate {
+            Duration::ZERO
+        } else if self.config.tab_strip_style == config::TabStripStyle::Chrome {
             self.fonts
                 .title_font()
                 .ok()
@@ -196,6 +273,10 @@ impl crate::TermWindow {
         } else {
             DELAY
         };
+        if immediate {
+            // (Chrome cancels a fade out: the card is back in full)
+            self.hover_card_leaving = None;
+        }
         self.tab_hover_card = Some(TabHoverCard {
             tab_idx: idx,
             tab_id,
@@ -203,9 +284,15 @@ impl crate::TermWindow {
             delay,
             answer: None,
             content: None,
+            fades_in: !immediate,
+            shown_at: None,
+            slide: previous.map(|previous| Slide {
+                previous,
+                since: None,
+            }),
             computed: None,
         });
-        self.update_next_frame_time(Some(since + delay));
+        self.repaint_card_at(since + delay);
 
         // ask now: the answer is there by the time the card shows
         let Some(window) = self.window.clone() else {
@@ -231,6 +318,126 @@ impl crate::TermWindow {
             },
         ))
         .detach();
+    }
+
+    /// Takes the card away: one that shows fades out.
+    fn hide_hover_card(&mut self) {
+        let Some(card) = self.tab_hover_card.take() else {
+            return;
+        };
+        let showing = match card {
+            TabHoverCard {
+                shown_at: Some(_),
+                computed: Some((_, computed)),
+                ..
+            } => Some(computed),
+            TabHoverCard { slide, .. } => slide.map(|s| s.previous),
+        };
+        if let Some(computed) = showing {
+            let now = Instant::now();
+            self.hover_card_leaving = Some((now, computed));
+            self.hover_card_left_at = Some(now);
+            if let Some(w) = self.window.as_ref() {
+                w.invalidate();
+            }
+        }
+    }
+
+    /// The next frame of an animation, a frame's time (`max_fps`) away
+    fn next_card_frame(&self) {
+        let fps = u64::from(self.config.max_fps.max(1));
+        self.repaint_card_at(Instant::now() + Duration::from_micros(1_000_000 / fps));
+    }
+
+    /// Repaints at `at`, for the card's timing (its delay, its frames):
+    /// focused or not, as Chrome shows cards over an inactive window's
+    /// tabs too (the window's own animations wait for the focus)
+    fn repaint_card_at(&self, at: Instant) {
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        promise::spawn::spawn(async move {
+            smol::Timer::at(at).await;
+            window.invalidate();
+        })
+        .detach();
+    }
+
+    /// The card taken away, while it fades out.
+    fn paint_leaving_hover_card(&mut self) -> anyhow::Result<()> {
+        let Some((since, _)) = self.hover_card_leaving.as_ref() else {
+            return Ok(());
+        };
+        let t = since.elapsed().as_secs_f32() / FADE_OUT.as_secs_f32();
+        if t >= 1. {
+            self.hover_card_leaving = None;
+            return Ok(());
+        }
+        let opacity = 1. - fast_out_slow_in(t);
+        let gl_state = self.render_state.as_ref().unwrap();
+        if let Some((_, computed)) = self.hover_card_leaving.as_ref() {
+            self.render_element_with_opacity(computed, gl_state, None, opacity)?;
+        }
+        self.next_card_frame();
+        Ok(())
+    }
+
+    /// Draws the laid-out card `computed`: fading in, or sliding from the
+    /// previous card (drawn beneath, the new one over it as it slides in:
+    /// the backgrounds the same, the text crossfades).
+    fn paint_card_frame(&mut self, computed: &ComputedElement) -> anyhow::Result<()> {
+        let now = Instant::now();
+        let Some(card) = self.tab_hover_card.as_mut() else {
+            return Ok(());
+        };
+        let shown_at = *card.shown_at.get_or_insert(now);
+        let fade = if card.fades_in {
+            fast_out_slow_in(shown_at.elapsed().as_secs_f32() / FADE_IN.as_secs_f32())
+        } else {
+            1.
+        };
+        let mut animating = fade < 1.;
+        let slide = match card.slide.as_mut() {
+            Some(slide) => {
+                let since = *slide.since.get_or_insert(now);
+                let t = since.elapsed().as_secs_f32() / SLIDE.as_secs_f32();
+                if t >= 1. {
+                    card.slide = None;
+                    None
+                } else {
+                    animating = true;
+                    Some((fast_out_slow_in(t), slide.previous.clone()))
+                }
+            }
+            None => None,
+        };
+        let gl_state = self.render_state.as_ref().unwrap();
+        match slide {
+            Some((s, mut previous)) => {
+                let from = previous.bounds.min_x();
+                let to = computed.bounds.min_x();
+                let x = from + (to - from) * s;
+                previous.translate(euclid::vec2(x - from, 0.));
+                self.render_element_with_opacity(&previous, gl_state, None, fade)?;
+                let mut current = computed.clone();
+                current.translate(euclid::vec2(x - to, 0.));
+                self.render_element_with_opacity(&current, gl_state, None, fade * s)?;
+            }
+            None => self.render_element_with_opacity(computed, gl_state, None, fade)?,
+        }
+        if animating {
+            self.next_card_frame();
+        }
+        Ok(())
+    }
+
+    /// While the new card waits for its content, the one it follows stays.
+    fn paint_previous_card(&self) -> anyhow::Result<()> {
+        if let Some(slide) = self.tab_hover_card.as_ref().and_then(|c| c.slide.as_ref()) {
+            let gl_state = self.render_state.as_ref().unwrap();
+            self.render_element(&slide.previous, gl_state, None)?;
+        }
+        Ok(())
     }
 
     fn hover_card_content(&self, tab_idx: usize, answer: Answer) -> Option<Content> {
@@ -281,6 +488,7 @@ impl crate::TermWindow {
         if !self.config.show_tab_hover_cards || self.get_modal().is_some() {
             return Ok(());
         }
+        self.paint_leaving_hover_card()?;
         let Some((tab_idx, since, delay, answer, built)) = self.tab_hover_card.as_ref().map(|c| {
             (
                 c.tab_idx,
@@ -293,16 +501,16 @@ impl crate::TermWindow {
             return Ok(());
         };
         if since.elapsed() < delay {
-            self.update_next_frame_time(Some(since + delay));
-            return Ok(());
+            self.repaint_card_at(since + delay);
+            return self.paint_previous_card();
         }
         if !built {
             let answer = match answer {
                 Some(answer) => answer,
                 None if since.elapsed() < delay + WAIT => {
                     // the answer invalidates the window when it comes
-                    self.update_next_frame_time(Some(since + delay + WAIT));
-                    return Ok(());
+                    self.repaint_card_at(since + delay + WAIT);
+                    return self.paint_previous_card();
                 }
                 None => None,
             };
@@ -314,7 +522,7 @@ impl crate::TermWindow {
         let Some(tab) = self.ui_items.iter().find(|i| {
             matches!(i.item_type, UIItemType::TabBar(TabBarItem::Tab { tab_idx: t, .. }) if t == tab_idx)
         }) else {
-            return Ok(());
+            return self.paint_previous_card();
         };
         let (tab_x, tab_bottom) = (tab.x as f32, (tab.y + tab.height) as f32);
         let key = (
@@ -330,13 +538,17 @@ impl crate::TermWindow {
             .and_then(|c| c.computed.as_ref())
         {
             if *laid_out == key {
-                let gl_state = self.render_state.as_ref().unwrap();
-                self.render_element(computed, gl_state, None)?;
-                return Ok(());
+                let computed = computed.clone();
+                return self.paint_card_frame(&computed);
             }
         }
         let Some(Some(content)) = self.tab_hover_card.as_ref().and_then(|c| c.content.clone())
         else {
+            // (no card for this tab: the one before it goes)
+            if let Some(slide) = self.tab_hover_card.as_mut().and_then(|c| c.slide.take()) {
+                self.hover_card_leaving = Some((Instant::now(), slide.previous));
+                self.next_card_frame();
+            }
             return Ok(());
         };
 
@@ -497,17 +709,28 @@ impl crate::TermWindow {
             },
             &card,
         )?;
-        self.render_element(&computed, gl_state, None)?;
+        let _ = gl_state;
         if let Some(card) = self.tab_hover_card.as_mut() {
-            card.computed = Some((key, computed));
+            card.computed = Some((key, computed.clone()));
         }
-        Ok(())
+        self.paint_card_frame(&computed)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// gfx's FAST_OUT_SLOW_IN, cubic-bezier(0.4, 0, 0.2, 1): its ends,
+    /// and fast early (half-way by x = 0.3, ~0.8 by the middle)
+    #[test]
+    fn fast_out_slow_in_as_gfx() {
+        assert_eq!(fast_out_slow_in(0.), 0.);
+        assert!((fast_out_slow_in(1.) - 1.).abs() < 1e-5);
+        let mid = fast_out_slow_in(0.5);
+        assert!((mid - 0.7755).abs() < 2e-3, "{mid}");
+        assert!(fast_out_slow_in(0.25) < fast_out_slow_in(0.26));
+    }
 
     #[test]
     fn the_screens_last_lines() {

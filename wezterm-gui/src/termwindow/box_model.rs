@@ -1049,6 +1049,18 @@ impl super::TermWindow {
         gl_state: &RenderState,
         inherited_colors: Option<&ElementColors>,
     ) -> anyhow::Result<()> {
+        self.render_element_with_opacity(element, gl_state, inherited_colors, 1.)
+    }
+
+    /// `render_element`, the whole of it at `opacity` (a card fading in
+    /// or out)
+    pub fn render_element_with_opacity(
+        &self,
+        element: &ComputedElement,
+        gl_state: &RenderState,
+        inherited_colors: Option<&ElementColors>,
+        opacity: f32,
+    ) -> anyhow::Result<()> {
         let mut flat = vec![];
         self.flatten_element(element, inherited_colors.cloned(), None, &mut flat);
         let mut zindexes: Vec<i8> = flat.iter().map(|(e, _, _)| e.zindex).collect();
@@ -1057,8 +1069,12 @@ impl super::TermWindow {
         for zindex in zindexes {
             let layer = gl_state.layer_for_zindex(zindex)?;
             let mut layers = layer.quad_allocator();
+            let marks = layers.marks();
             for (e, inherited, clip) in flat.iter().filter(|(e, _, _)| e.zindex == zindex) {
                 self.render_one_element(e, &mut layers, inherited.as_ref(), *clip)?;
+            }
+            if opacity < 1. {
+                layers.fade_from(marks, opacity.max(0.));
             }
         }
         Ok(())

@@ -16,7 +16,7 @@ pub const V_BOT_LEFT: usize = 2;
 pub const V_BOT_RIGHT: usize = 3;
 
 /// a regular monochrome text glyph
-const IS_GLYPH: f32 = 0.0;
+pub(crate) const IS_GLYPH: f32 = 0.0;
 /// a color emoji glyph
 const IS_COLOR_EMOJI: f32 = 1.0;
 /// a full color texture attached as the
@@ -26,7 +26,7 @@ const IS_BG_IMAGE: f32 = 2.0;
 /// image, we use the solid bg color
 const IS_SOLID_COLOR: f32 = 3.0;
 /// Grayscale poly quad for non-aa text render layers
-const IS_GRAY_SCALE: f32 = 4.0;
+pub(crate) const IS_GRAY_SCALE: f32 = 4.0;
 
 #[repr(C)]
 #[derive(Copy, Clone, Default, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -408,6 +408,30 @@ impl TripleLayerQuadAllocatorTrait for HeapQuadAllocator {
 pub enum TripleLayerQuadAllocator<'a> {
     Gpu(BorrowedLayers),
     Heap(&'a mut HeapQuadAllocator),
+}
+
+impl<'a> TripleLayerQuadAllocator<'a> {
+    /// How many quads each layer holds so far (`fade_from`)
+    pub fn marks(&self) -> [usize; 3] {
+        match self {
+            Self::Gpu(b) => [
+                b.layers[0].quads(),
+                b.layers[1].quads(),
+                b.layers[2].quads(),
+            ],
+            Self::Heap(_) => [0; 3],
+        }
+    }
+
+    /// Multiplies the opacity of the quads allocated since `marks` by
+    /// `opacity` (drawn onto the GPU's layers; the heap's are left)
+    pub fn fade_from(&mut self, marks: [usize; 3], opacity: f32) {
+        if let Self::Gpu(b) = self {
+            for (layer, mark) in b.layers.iter_mut().zip(marks) {
+                layer.fade_from(mark, opacity);
+            }
+        }
+    }
 }
 
 impl<'a> TripleLayerQuadAllocatorTrait for TripleLayerQuadAllocator<'a> {
