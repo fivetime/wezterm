@@ -24,6 +24,12 @@ use wezterm_term::input::{MouseButton, MouseEventKind as TMEK};
 use wezterm_term::{ClickPosition, LastMouseClick, StableRowIndex};
 
 /// The pointer for resizing from `edge`.
+/// How far the pointer moves with the button held on the tab bar before
+/// the window is dragged, in DIP: Chrome's window drag threshold on
+/// Linux (`LinuxUi::kDefaultWindowDragThreshold`, 8, GTK's
+/// `gtk-dnd-drag-threshold` where the theme sets one).
+const WINDOW_DRAG_THRESHOLD: f32 = 8.;
+
 fn resize_cursor(edge: ResizeEdge) -> CursorIcon {
     match edge {
         ResizeEdge::TopLeft => CursorIcon::NwResize,
@@ -226,7 +232,8 @@ impl super::TermWindow {
                 self.current_mouse_capture = None;
                 self.current_mouse_buttons.retain(|p| p != press);
                 if press == &MousePress::Left && self.window_drag_position.take().is_some() {
-                    // Completed a window drag
+                    // Completed a window drag (or a click that began none)
+                    self.window_drag_started = false;
                     return;
                 }
                 if press == &MousePress::Left && self.dragging.take().is_some() {
@@ -263,6 +270,28 @@ impl super::TermWindow {
                     // Compute the distance since the initial event
                     let delta_x = start.screen_coords.x - event.screen_coords.x;
                     let delta_y = start.screen_coords.y - event.screen_coords.y;
+
+                    // The drag begins once the pointer has moved the
+                    // threshold (Chrome's window drag threshold, 8 px,
+                    // GTK's `gtk-dnd-drag-threshold`; WindowEventFilterLinux
+                    // records the caption press and starts the move on
+                    // the first drag past it): a double-click's presses
+                    // start no move, so the second one reaches this
+                    // window rather than the window manager's grab.
+                    // Where the platform then moves the window itself
+                    // (X11's _NET_WM_MOVERESIZE, Wayland's xdg move) no
+                    // more motion arrives here; elsewhere (macOS) the
+                    // window follows the pointer from here.
+                    if !self.window_drag_started {
+                        let threshold =
+                            (WINDOW_DRAG_THRESHOLD * self.dimensions.dpi as f32 / 96.) as isize;
+                        if delta_x.abs() < threshold && delta_y.abs() < threshold {
+                            return;
+                        }
+                        self.window_drag_started = true;
+                        context.request_drag_move();
+                        return;
+                    }
 
                     // Now compute a new window position.
                     // We don't have a direct way to get the position,
@@ -637,21 +666,35 @@ impl super::TermWindow {
                     if let Some(ref window) = self.window {
                         if self.config.window_decorations
                             == WindowDecorations::INTEGRATED_BUTTONS | WindowDecorations::RESIZE
+                            && self.last_mouse_click.as_ref().map(|c| c.streak) == Some(2)
                         {
-                            if self.last_mouse_click.as_ref().map(|c| c.streak) == Some(2) {
-                                if maximized {
-                                    window.restore();
-                                } else {
-                                    window.maximize();
-                                }
+                            // A double-click on the strip's empty part
+                            // toggles maximized, as on a title bar: Chrome's
+                            // default caption action on Linux
+                            // (WindowEventFilterLinux::OnClickedCaption,
+                            // kToggleMaximize), what Windows itself does
+                            // with a caption (the strip is HTCAPTION there,
+                            // WM_NCLBUTTONDBLCLK never reaches this code),
+                            // and macOS's default "Maximize" double-click
+                            // action, the zoom `maximize` performs. No drag
+                            // begins from the second press.
+                            self.window_drag_position = None;
+                            self.window_drag_started = false;
+                            if maximized {
+                                window.restore();
+                            } else {
+                                window.maximize();
                             }
+                            return;
                         }
                     }
-                    // Potentially starting a drag by the tab bar
+                    // Potentially starting a drag by the tab bar: recorded
+                    // here, begun on motion past the threshold (see the
+                    // `WMEK::Move` arm above)
                     if !maximized {
                         self.window_drag_position.replace(event.clone());
+                        self.window_drag_started = false;
                     }
-                    context.request_drag_move();
                 }
                 TabBarItem::WindowButton(button) => {
                     use window::IntegratedTitleButton as Button;

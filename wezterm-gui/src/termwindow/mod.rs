@@ -413,6 +413,9 @@ pub struct TermWindow {
     is_click_to_focus_window: bool,
     last_mouse_coords: (usize, i64),
     window_drag_position: Option<MouseEvent>,
+    /// The window drag from `window_drag_position` has begun: the
+    /// pointer moved the threshold with the button held.
+    window_drag_started: bool,
     current_mouse_event: Option<MouseEvent>,
     prev_cursor: PrevCursorPos,
     last_scroll_info: RenderableDimensions,
@@ -743,6 +746,7 @@ impl TermWindow {
             left_status: String::new(),
             last_mouse_coords: (0, -1),
             window_drag_position: None,
+            window_drag_started: false,
             current_mouse_event: None,
             current_modifier_and_leds: Default::default(),
             prev_cursor: PrevCursorPos::new(),

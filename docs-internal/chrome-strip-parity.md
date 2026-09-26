@@ -37,6 +37,13 @@ margin); `ntb.position` (6 past the last tab, 6 down the strip) and
 `ntb.button_size` 28 with its 16 icon and 14 radius; `region.grab_handle`
 (42 DIP kept free after the new-tab button, before the caption buttons,
 however full the strip: room to drag the window by);
+`region.caption_clicks` (the strip's empty part is the window's caption:
+a press records the drag, which begins on motion past 8 DIP, Chrome's
+Linux threshold, so a double-click's second press reaches the window and
+toggles maximized on X11 and Wayland; Windows has the strip as HTCAPTION
+and does both itself; macOS's default double-click action, "Maximize",
+is the zoom `maximize` performs — the Fill/Minimize/None preferences are
+not read, see the known differences);
 `tab_search.leading_button` (28 round, 6 into the region, the tabs' strip
 28 past the region's start; the 16 chevron of `kExpandMoreOldIcon`); `px.scale_and_align_bounds` for the
 body's pixel edges; the hit test's 3-DIP reach into the separators and
@@ -169,6 +176,10 @@ whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
 
 - The toolbar's top line's rounded ends at the window's corners
   (`kToolbarCornerRadius` 8): the terminal's content is square.
+- A double-click on the strip's empty part always toggles maximized;
+  Chrome follows the desktop's caption preference (GTK's
+  `gtk-titlebar-double-click`, macOS's `AppleActionOnDoubleClick`), whose
+  default is the same.
 - The window's round top corners cut the content by the arc's coverage
   (a mask multiplied into the content's corner squares, drawn last),
   as Chrome clips its painting to the rounded window shape: a button
