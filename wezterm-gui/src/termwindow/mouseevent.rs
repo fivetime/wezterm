@@ -289,6 +289,14 @@ impl super::TermWindow {
                             return;
                         }
                         self.window_drag_started = true;
+                        // the move starts from where the pointer is now,
+                        // as Chrome's does (the drag event past the
+                        // threshold): the window manager is told this
+                        // point (X11's _NET_WM_MOVERESIZE carries it, and
+                        // KWin puts the pointer there). Left to the last
+                        // hover's, it could be none at all (0,0): KWin
+                        // then threw the window across the screen
+                        context.set_window_drag_position(event.screen_coords);
                         context.request_drag_move();
                         return;
                     }

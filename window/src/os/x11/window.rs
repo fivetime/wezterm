@@ -1093,6 +1093,14 @@ impl XWindowInner {
                     .process_key_release_event(key_release, &mut self.events);
             }
             Event::X(xcb::x::Event::MotionNotify(motion)) => {
+                // A move handed to the window manager starts on a motion
+                // past the drag threshold, and motion queued before the
+                // manager's grab still arrives: with the button still
+                // held it is no sign that the move is over (any mouse
+                // event cancels it, see do_mouse_event), only stale
+                if self.dragging && motion.state().contains(xcb::x::KeyButMask::BUTTON1) {
+                    return Ok(());
+                }
                 let Some((x, y)) = self.to_content(motion.event_x(), motion.event_y()) else {
                     return Ok(());
                 };
