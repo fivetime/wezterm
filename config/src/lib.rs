@@ -570,18 +570,19 @@ impl ConfigInner {
         }
     }
 
-    /// Attempt to load the user's configuration.
+    /// Takes a freshly loaded configuration (`Config::load`, evaluated
+    /// without holding the lock: see `Configuration::reload`).
     /// On success, clear any error and replace the current
     /// configuration.
     /// On failure, retain the existing configuration but
     /// replace any captured error message.
-    fn reload(&mut self) {
+    fn apply_loaded(&mut self, loaded: LoadedConfig) {
         let LoadedConfig {
             config,
             file_name,
             lua,
             warnings,
-        } = Config::load();
+        } = loaded;
 
         self.warnings = warnings;
 
@@ -655,14 +656,6 @@ impl ConfigInner {
         self.generation += 1;
     }
 
-    fn overridden(&mut self, overrides: &wezterm_dynamic::Value) -> Result<ConfigHandle, Error> {
-        let config = Config::load_with_overrides(overrides);
-        Ok(ConfigHandle {
-            config: Arc::new(config.config?),
-            generation: self.generation,
-        })
-    }
-
     fn use_test(&mut self) {
         let mut config = Config::default_config();
         config.font_locator = FontLocatorSelection::ConfigDirsOnly;
@@ -687,12 +680,17 @@ impl ConfigInner {
 
 pub struct Configuration {
     inner: Mutex<ConfigInner>,
+    /// Held while a reload evaluates the configuration, so that reloads
+    /// apply in the order they began, without holding `inner` (which
+    /// every `configuration()` takes) for the evaluation
+    reloading: Mutex<()>,
 }
 
 impl Configuration {
     pub fn new() -> Self {
         Self {
             inner: Mutex::new(ConfigInner::new()),
+            reloading: Mutex::new(()),
         }
     }
 
@@ -730,9 +728,29 @@ impl Configuration {
         inner.use_this_config(cfg);
     }
 
+    /// The configuration with a window's overrides applied. With none,
+    /// that is the configuration as loaded: evaluating the file again,
+    /// as every window did after every reload, held the GUI thread ~50 ms
+    /// (a small config, Windows). The file is evaluated without holding
+    /// the lock, as for a reload.
     fn overridden(&self, overrides: &wezterm_dynamic::Value) -> Result<ConfigHandle, Error> {
-        let mut inner = self.inner.lock().unwrap();
-        inner.overridden(overrides)
+        let no_overrides = match overrides {
+            wezterm_dynamic::Value::Null => true,
+            wezterm_dynamic::Value::Object(o) => o.is_empty(),
+            _ => false,
+        };
+        if no_overrides {
+            if let Some(error) = self.get_error() {
+                bail!("{}", error);
+            }
+            return Ok(self.get());
+        }
+        let generation = self.inner.lock().unwrap().generation;
+        let config = Config::load_with_overrides(overrides);
+        Ok(ConfigHandle {
+            config: Arc::new(config.config?),
+            generation,
+        })
     }
 
     /// Use a config that doesn't depend on the user's
@@ -743,9 +761,15 @@ impl Configuration {
     }
 
     /// Reload the configuration
+    ///
+    /// The file is evaluated before the lock is taken: evaluating it under
+    /// the lock (50-120 ms for a small config on Windows) held up every
+    /// `configuration()` meanwhile, the GUI thread's included.
     pub fn reload(&self) {
+        let _reloading = self.reloading.lock().unwrap();
+        let loaded = Config::load();
         let mut inner = self.inner.lock().unwrap();
-        inner.reload();
+        inner.apply_loaded(loaded);
     }
 
     /// Returns a copy of any captured error message.
