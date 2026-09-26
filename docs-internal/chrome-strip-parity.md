@@ -135,7 +135,7 @@ Frame (X11): `x11.gtk_frame_extents` ceiled to pixels;
 `x11.input_region` (the insets less the 10-DIP band);
 `x11.opaque_region` (the content below its round corners);
 `frame.resize_border` 10 and `hit.resize_area_corner_size` 16;
-`frame.tiled_effects` (one-way maximized: the band alone, no shadow, no
+`frame.tiled_effects` (one-way maximized, X11 and Wayland: the band alone, no shadow, no
 radius); `frame.border_insets_condensed` (nothing when maximized);
 `gtk_frame.*` (the theme's decoration rendered and nine-sliced, its
 thickness and radius measured; drawn at scale from a 2x picture rather
@@ -174,7 +174,38 @@ Hover card: `hover_card.card.client_width_dip` 256,
 `hover_card.corner_radius_dip` 8, `hover_card.text.margins` 12,
 `hover_card.show_delay.algorithm` (300 ms up to a 64-wide tab, 800 at
 256, 500 more there), `hover_card.placement.anchor_rect` (the tab's
-own left edge, 2 DIP up from its bottom).
+own left edge, 2 DIP up from its bottom); its animations
+(TabHoverCardController with views::WidgetFadeAnimator's and
+BubbleSlideAnimator's defaults): the first card fades in over 200 ms, a
+card on another tab moves there at once, sliding 200 ms
+(`kHoverCardSlideDuration`) while its text crossfades, a card taken away
+fades out over 150 ms and shows again at once within 300 ms
+(`kShowWithoutDelayTimeBuffer`), all FAST_OUT_SLOW_IN
+(cubic-bezier(0.4, 0, 0.2, 1)); no slide with the fades (the declutter
+features are off by default). Shown over an inactive window's tabs too.
+
+Tab overflow: with more tabs than fit, the tabs shrink to their minimum
+widths (active 56, inactive 32, overlap 18) and those past the strip's
+end are hidden whole (`TabContainerImpl::ShouldTabBeVisible`), the
+active one included: the default strip does not scroll
+(`kTabStripUnification`, which brings `TabStripView`'s scrolling and
+keeps the active tab in view, is disabled by default; checked
+2026-09-26), and nothing else keeps the active tab shown.
+
+Title: `text.tab_title_elide_behavior` FADE_TAIL (tab_title.cc): the
+text runs to the label's edge, cut there, its last stretch faded out
+linearly (RenderText::ApplyFadeEffects, CreateFadeShader) over
+GetExpectedTextWidth(3), a third of the width when very narrow, to
+transparent, or when fewer than four characters fit to up to 51/255 at
+no width; the expected character width as gfx has it per platform (the
+font's OS/2 xAvgCharWidth on Linux, 'x' on Windows, the mean of a-z on
+macOS). Titles are not capped at `tab_max_width` cells.
+
+Caption clicks: a double-click on the strip's empty part does what the
+desktop's title bar preference says: GTK's `gtk-titlebar-double-click`
+on Linux (toggle-maximize, minimize, lower, menu, none), passed in as
+`titlebar_double_click`; macOS's `AppleActionOnDoubleClick` (Fill,
+Maximize, Minimize, None), read by the window; Windows' caption.
 
 Text: `text.gtk_font_name_parse` (the desktop font at Chrome's
 whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
@@ -190,13 +221,10 @@ whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
   scrolling: a terminal has none of them.
 - `hover.opacity_by_width` and the GM2 contrast opacities: only used for
   image themes in Chrome.
-- The hover card's fade and slide animations, its thumbnail crossfade,
-  its two-layer shadow (drawn as rings of the same reach), its footer.
-- `text.tab_title_elide_behavior` FADE_TAIL: the title is cut where the
-  room ends, not faded.
+- The hover card's thumbnail crossfade, its two-layer shadow (drawn as
+  rings of the same reach), its footer.
 - The close button's ripple (`close_button.ripple_timings`), the focus
   rings, keyboard focus.
-- Wayland tiled edges (`frame.tiled_effects` is X11 only here).
 
 ## Known differences
 
@@ -212,10 +240,14 @@ whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
   width (the hidden tabs' room; most visible after tabs opened maximized
   and the window restored, the active tab at the end then hidden). Asked
   for 2026-09-26; `Layout::compute`'s `tabs_right`, under test.
-- A double-click on the strip's empty part always toggles maximized;
-  Chrome follows the desktop's caption preference (GTK's
-  `gtk-titlebar-double-click`, macOS's `AppleActionOnDoubleClick`), whose
-  default is the same.
+- The caption's "menu" action shows the window manager's window menu
+  (Wayland's `show_window_menu`, X11's `_GTK_SHOW_WINDOW_MENU`); Chrome
+  shows its own frame menu where it has one and uses the server's only
+  on Wayland. "lower" is X11 only, as in Chrome.
+- The hover card's animations run a frame at a time at `max_fps`, the
+  card's opacity applied to its quads; a colour emoji does not fade (the
+  shader takes its alpha from the picture): at full opacity in a fading
+  card, cut but not faded at a title's end.
 - The window's round top corners cut the content by the arc's coverage
   (a mask multiplied into the content's corner squares, drawn last),
   as Chrome clips its painting to the rounded window shape: a button
