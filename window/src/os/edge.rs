@@ -648,7 +648,7 @@ mod tests {
             }
             let mut got = vec![0; expected.len()];
             g.fill(&picture, header, (0, 0, outer.0, outer.1), true, &mut got);
-            assert!(got == expected, "whole window {outer:?} r {radius}");
+            assert!(got == expected, "whole window {:?} r {}", outer, radius);
             for rect in [
                 (0, 0, outer.0, 13),
                 (0, 13, 20, outer.1 - 13),
@@ -662,7 +662,13 @@ mod tests {
                 }
                 let mut got = vec![0; expected.len()];
                 g.fill(&picture, header, rect, false, &mut got);
-                assert!(got == expected, "rect {rect:?} of {outer:?} r {radius}");
+                assert!(
+                    got == expected,
+                    "rect {:?} of {:?} r {}",
+                    rect,
+                    outer,
+                    radius
+                );
             }
         }
     }
@@ -674,16 +680,16 @@ mod tests {
     fn a_corner_is_cut_along_its_arc() {
         let rows = corner_row_insets(14);
         assert_eq!(rows.len(), 14);
-        assert!(rows.windows(2).all(|w| w[0] >= w[1]), "{rows:?}");
+        assert!(rows.windows(2).all(|w| w[0] >= w[1]), "{:?}", rows);
         assert_eq!(*rows.last().unwrap(), 0);
-        assert!(rows[0] >= 8 && rows[0] < 14, "{rows:?}");
+        assert!(rows[0] >= 8 && rows[0] < 14, "{:?}", rows);
         let r = 14f32;
         for (y, &inset) in rows.iter().enumerate() {
             let dy = r - y as f32 - 0.5;
             let inside = |x: u16| (f32::from(x) + 0.5 - r).powi(2) + dy * dy <= r * r;
-            assert!(inside(inset), "row {y}: first kept pixel inside");
+            assert!(inside(inset), "row {}: first kept pixel inside", y);
             if inset > 0 {
-                assert!(!inside(inset - 1), "row {y}: the one before outside");
+                assert!(!inside(inset - 1), "row {}: the one before outside", y);
             }
         }
         assert!(corner_row_insets(0).is_empty());
