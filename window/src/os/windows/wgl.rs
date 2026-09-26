@@ -220,10 +220,14 @@ impl GlState {
             24,
             STENCIL_BITS_ARB as i32,
             8,
-            SAMPLE_BUFFERS_ARB as i32,
-            1,
-            SAMPLES_ARB as i32,
-            4,
+            // No multisampling (SAMPLE_BUFFERS_ARB/SAMPLES_ARB, 4 samples
+            // until now), as the EGL and macOS backends ask for none: the
+            // window draws axis-aligned quads only, where it changed just
+            // the one column at a glyph quad's fractional edge, and the
+            // 4x buffer made every resize reallocate four times the
+            // memory and every swap resolve it. Measured on AMD's GL 4.5,
+            // a 1-tab window's resize steps: mean 15 -> 10.5 ms, p90 49
+            // -> 33, max 95 -> 62.
         ];
 
         if has_extension(&extensions, "WGL_ARB_framebuffer_sRGB") {

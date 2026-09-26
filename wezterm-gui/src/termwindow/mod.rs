@@ -1123,6 +1123,8 @@ impl TermWindow {
             ),
         );
         self.paint_impl(&mut RenderFrame::Glium(&mut frame));
+        // presenting (SwapBuffers), which may wait for the display
+        let _t = crate::stats::Timed::new("gui.paint.present");
         window.finish_frame(frame).is_ok()
     }
 
