@@ -1004,6 +1004,17 @@ impl XConnection {
             .with_context(|| format!("{req:#?}"))
     }
 
+    /// Sends `req` without waiting for the server's answer: an error
+    /// comes back later as an event (logged there). For requests sent in
+    /// a burst (a resize's properties, shapes and pictures), which would
+    /// otherwise cost a round trip each; the caller flushes.
+    pub(crate) fn send_request_unchecked<R>(&self, req: &R)
+    where
+        R: xcb::RequestWithoutReply + std::fmt::Debug,
+    {
+        let _ = self.conn.send_request(req);
+    }
+
     pub(crate) fn send_request_no_reply_log<R>(&self, req: &R)
     where
         R: xcb::RequestWithoutReply + std::fmt::Debug,

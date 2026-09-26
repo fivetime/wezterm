@@ -52,10 +52,15 @@ enum Source {
 pub struct Edge {
     config: WindowEdge,
     source: Source,
-    /// The pictures at the last scale (and, for Chrome's frame, the last
-    /// frame colour) asked for.
-    scaled: Option<(f64, u32, RgbaImage, RgbaImage)>,
+    /// The pictures at the scales (and, for Chrome's frame, the frame
+    /// colours) last asked for, the most recent first: focused and
+    /// unfocused windows ask for different frame colours, and a focus
+    /// change must not redraw (and re-blur) the pictures.
+    scaled: Vec<(f64, u32, RgbaImage, RgbaImage)>,
 }
+
+/// How many (scale, frame colour) picture pairs are kept.
+const SCALED_KEPT: usize = 4;
 
 impl Edge {
     /// The edge `config` asks for: Chrome's own frame with a `shadow`
@@ -67,7 +72,7 @@ impl Edge {
             return Ok(Self {
                 config: config.clone(),
                 source: Source::Chrome { shadow, round },
-                scaled: None,
+                scaled: Vec::new(),
             });
         }
         Self::load(config)
@@ -84,7 +89,7 @@ impl Edge {
         Ok(Self {
             config: config.clone(),
             source: Source::Pictures { focused, unfocused },
-            scaled: None,
+            scaled: Vec::new(),
         })
     }
 
@@ -198,7 +203,10 @@ impl Edge {
             }
             Source::Pictures { .. } => 0,
         };
-        if self.scaled.as_ref().map(|s| (s.0, s.1)) != Some((scale, key)) {
+        if let Some(i) = self.scaled.iter().position(|s| (s.0, s.1) == (scale, key)) {
+            let hit = self.scaled.remove(i);
+            self.scaled.insert(0, hit);
+        } else {
             let side = ((4. * self.config.slice * scale).round() as u32).max(4) / 4 * 4;
             let (f, u) = match &self.source {
                 Source::Pictures { focused, unfocused } => {
@@ -228,45 +236,35 @@ impl Edge {
                     (draw(true), draw(false))
                 }
             };
-            self.scaled = Some((scale, key, f, u));
+            self.scaled.insert(0, (scale, key, f, u));
+            self.scaled.truncate(SCALED_KEPT);
         }
-        let (_, _, f, u) = self.scaled.as_ref().expect("scaled above");
+        let (_, _, f, u) = &self.scaled[0];
         (f, u)
     }
 
     /// The whole picture of an `outer`-sized window's edge, as one buffer
     /// of premultiplied BGRA (wl_shm ARGB8888), the content's own place in
     /// it clear but for the round top corners: what a subsurface beneath
-    /// the content shows.
-    pub fn paint_all(
+    /// the content shows; into `out` (at least `outer`'s width x height
+    /// x 4 bytes, rows packed), with no allocation of its own. (Wayland's)
+    #[cfg_attr(not(feature = "wayland"), allow(dead_code))]
+    pub fn paint_all_into(
         &mut self,
         focused: bool,
         outer: (u16, u16),
         insets: Insets,
         scale: f64,
         header: [f32; 4],
-    ) -> Vec<u8> {
+        out: &mut [u8],
+    ) {
         let radius = self.radius(scale);
         let header_under = !self.is_solid();
         let (pf, pu) = self.pictures(scale, header);
         let picture = if focused { pf } else { pu };
         let geometry = Geometry::new(outer, insets, picture.width(), radius, header_under);
-        let (inner_w, inner_h) = geometry.inner();
-        let (l, t) = (insets.left, insets.top);
-        let mut data = Vec::with_capacity(usize::from(outer.0) * usize::from(outer.1) * 4);
-        for y in 0..outer.1 {
-            for x in 0..outer.0 {
-                let inside = x >= l && x < l + inner_w && y >= t && y < t + inner_h;
-                let corner =
-                    y < t + radius && (x < l + radius || x >= l + inner_w - radius.min(inner_w));
-                if inside && !corner {
-                    data.extend([0; 4]);
-                } else {
-                    data.extend(geometry.pixel(picture, x, y, header));
-                }
-            }
-        }
-        data
+        let rect = (0, 0, outer.0, outer.1);
+        geometry.fill(picture, header, rect, true, out);
     }
 
     /// The pixels of the margins (and the rounded top corners) of an
@@ -312,12 +310,8 @@ impl Edge {
             .into_iter()
             .filter(|r| r.2 > 0 && r.3 > 0)
             .map(|(x, y, rw, rh)| {
-                let mut data = Vec::with_capacity(rw as usize * rh as usize * 4);
-                for py in y..y + rh {
-                    for px in x..x + rw {
-                        data.extend(geometry.pixel(picture, px, py, header));
-                    }
-                }
+                let mut data = vec![0; rw as usize * rh as usize * 4];
+                geometry.fill(picture, header, (x, y, rw, rh), false, &mut data);
                 (x, y, rw, rh, data)
             })
             .collect()
@@ -377,6 +371,83 @@ impl Geometry {
             3 * fs + (d - extent)
         } else {
             2 * fs
+        }
+    }
+
+    /// The window's pixels in `rect` (x, y, width, height) into `out`,
+    /// rows packed: what `pixel` gives for each, the content's inside
+    /// (but for its cut top corners) clear when `clear_inside`. Along a
+    /// side the picture's middle is stretched, so every pixel between
+    /// the corners is the same: each row computes its two ends and
+    /// copies one value across the middle, and a row like the one before
+    /// it (the same picture row, away from the round corners) is copied
+    /// whole. A resize repaints in time proportional to the margins'
+    /// length, not their area.
+    fn fill(
+        &self,
+        picture: &RgbaImage,
+        header: [f32; 4],
+        rect: (u16, u16, u16, u16),
+        clear_inside: bool,
+        out: &mut [u8],
+    ) {
+        let (x, y, w, h) = rect;
+        let (x, y, w, h) = (i32::from(x), i32::from(y), usize::from(w), i32::from(h));
+        let row_len = w * 4;
+        if row_len == 0 {
+            return;
+        }
+        let (inner_w, inner_h) = self.inner();
+        let (inner_w, inner_h) = (i32::from(inner_w), i32::from(inner_h));
+        let (l, t) = (i32::from(self.insets.left), i32::from(self.insets.top));
+        let r = i32::from(self.radius);
+        // the middle run along x: the picture's middle column, no round
+        // corner in it
+        let run0 = self.slice.min(inner_w / 2).max(r);
+        let run1 = inner_w - run0;
+        let mut previous: Option<(i32, i32, bool)> = None;
+        for (j, py) in (y..y + h).enumerate() {
+            let dy = py - t;
+            let inside_v = dy >= 0 && dy < inner_h;
+            let key = (
+                self.source(dy, inner_h),
+                if (0..r).contains(&dy) { dy } else { -1 },
+                inside_v,
+            );
+            let at = j * row_len;
+            if j > 0 && previous == Some(key) {
+                out.copy_within(at - row_len..at, at);
+                continue;
+            }
+            previous = Some(key);
+            let row = &mut out[at..at + row_len];
+            let mut px = x;
+            while px < x + w as i32 {
+                let dx = px - l;
+                let i = (px - x) as usize * 4;
+                if dx >= run0 && dx < run1 {
+                    let end = (run1 + l).min(x + w as i32);
+                    let value = if clear_inside && inside_v {
+                        [0; 4]
+                    } else {
+                        self.pixel(picture, px as u16, py as u16, header)
+                    };
+                    for chunk in row[i..(end - x) as usize * 4].as_chunks_mut::<4>().0 {
+                        chunk.copy_from_slice(&value);
+                    }
+                    px = end;
+                    continue;
+                }
+                let inside = inside_v && dx >= 0 && dx < inner_w;
+                let corner = dy < r && (dx < r || dx >= inner_w - r.min(inner_w));
+                let value = if clear_inside && inside && !corner {
+                    [0; 4]
+                } else {
+                    self.pixel(picture, px as u16, py as u16, header)
+                };
+                row[i..i + 4].copy_from_slice(&value);
+                px += 1;
+            }
         }
     }
 
@@ -521,6 +592,65 @@ mod tests {
         assert_eq!(g.corner_cover(3, 8, 400), 0., "below the rounding");
         let edge = g.corner_cover(2, 2, 400);
         assert!(edge > 0. && edge < 1., "on the curve: partly, {}", edge);
+    }
+
+    /// The row-by-row fill gives what `pixel` gives for every pixel: the
+    /// whole window (the content clear) and the margins' rectangles, at
+    /// sizes around the corners' reach, round corners and not.
+    #[test]
+    fn fill_matches_every_pixel() {
+        let mut picture = RgbaImage::new(64, 64);
+        for (x, y, p) in picture.enumerate_pixels_mut() {
+            *p = image::Rgba([
+                (x * 4) as u8,
+                (y * 4) as u8,
+                (x ^ y) as u8 * 3,
+                ((x + y) * 2) as u8,
+            ]);
+        }
+        let header = [0.2, 0.4, 0.6, 1.];
+        for (outer, radius, under) in [
+            ((440, 340), 8, true),
+            ((70, 60), 8, true),
+            ((41, 41), 0, false),
+            ((200, 90), 12, true),
+            ((42, 200), 4, false),
+        ] {
+            let g = Geometry::new(outer, insets(), 64, radius, under);
+            let (inner_w, inner_h) = g.inner();
+            let (l, t) = (insets().left, insets().top);
+            let mut expected = vec![];
+            for y in 0..outer.1 {
+                for x in 0..outer.0 {
+                    let inside = x >= l && x < l + inner_w && y >= t && y < t + inner_h;
+                    let corner = y < t + radius
+                        && (x < l + radius || x >= l + inner_w - radius.min(inner_w));
+                    if inside && !corner {
+                        expected.extend([0; 4]);
+                    } else {
+                        expected.extend(g.pixel(&picture, x, y, header));
+                    }
+                }
+            }
+            let mut got = vec![0; expected.len()];
+            g.fill(&picture, header, (0, 0, outer.0, outer.1), true, &mut got);
+            assert!(got == expected, "whole window {outer:?} r {radius}");
+            for rect in [
+                (0, 0, outer.0, 13),
+                (0, 13, 20, outer.1 - 13),
+                (7, 3, 30, 25),
+            ] {
+                let mut expected = vec![];
+                for y in rect.1..rect.1 + rect.3 {
+                    for x in rect.0..rect.0 + rect.2 {
+                        expected.extend(g.pixel(&picture, x, y, header));
+                    }
+                }
+                let mut got = vec![0; expected.len()];
+                g.fill(&picture, header, rect, false, &mut got);
+                assert!(got == expected, "rect {rect:?} of {outer:?} r {radius}");
+            }
+        }
     }
 
     #[test]

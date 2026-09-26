@@ -83,6 +83,9 @@ impl Default for DragAndDrop {
     }
 }
 
+/// What a fit depends on: the outer size, restored, tiled, the dpi's bits.
+type FitKey = ((u16, u16), bool, bool, u64);
+
 pub(crate) struct XWindowInner {
     pub window_id: xcb::x::Window,
     pub child_id: xcb::x::Window,
@@ -120,6 +123,10 @@ pub(crate) struct XWindowInner {
     outer: (u16, u16),
     /// What the margins were last painted for: size, insets, focus, dpi.
     edge_painted: Option<((u16, u16), crate::os::edge::Insets, bool, u64)>,
+    /// The last `fit`: the outer size, restored, tiled and dpi it was for,
+    /// and the content's size it gave. Fitting again to the same is a
+    /// no-op (a drag's ConfigureNotify, a repeated state).
+    fitted: Option<(FitKey, (u16, u16))>,
     /// Maximized one way: the edge is the resize band alone.
     tiled: bool,
     edge_gc: Option<xcb::x::Gcontext>,
@@ -321,6 +328,12 @@ impl XWindowInner {
         // tiled (maximized one way): the resize band, no shadow, no round
         // corners, as Chrome keeps its frame then
         let tiled = state.contains(WindowState::TILED);
+        let key = (outer, restored, tiled, dpi.to_bits());
+        if let Some((fitted, inner)) = self.fitted {
+            if fitted == key {
+                return inner;
+            }
+        }
         self.tiled = tiled;
         let insets = if tiled {
             edge.band_insets(scale)
@@ -339,12 +352,12 @@ impl XWindowInner {
         // frame's 4 DIP included: X11Window::UpdateDecorationInsets)
         let extents = conn.atom_gtk_frame_extents;
         if insets.is_empty() {
-            conn.send_request_no_reply_log(&xcb::x::DeleteProperty {
+            conn.send_request_unchecked(&xcb::x::DeleteProperty {
                 window: self.window_id,
                 property: extents,
             });
         } else {
-            conn.send_request_no_reply_log(&xcb::x::ChangeProperty {
+            conn.send_request_unchecked(&xcb::x::ChangeProperty {
                 mode: PropMode::Replace,
                 window: self.window_id,
                 property: extents,
@@ -389,7 +402,7 @@ impl XWindowInner {
                 corner,
             ]
         };
-        conn.send_request_no_reply_log(&xcb::x::ChangeProperty {
+        conn.send_request_unchecked(&xcb::x::ChangeProperty {
             mode: PropMode::Replace,
             window: self.window_id,
             property: conn.atom_net_wm_opaque_region,
@@ -398,7 +411,7 @@ impl XWindowInner {
         });
         // clicks on the shadow fall through, but for the resize band
         if insets.is_empty() {
-            conn.send_request_no_reply_log(&xcb::shape::Mask {
+            conn.send_request_unchecked(&xcb::shape::Mask {
                 operation: xcb::shape::So::Set,
                 destination_kind: xcb::shape::Sk::Input,
                 destination_window: self.window_id,
@@ -409,7 +422,7 @@ impl XWindowInner {
         } else {
             let x = i32::from(insets.left) - i32::from(band);
             let y = i32::from(insets.top) - i32::from(band);
-            conn.send_request_no_reply_log(&xcb::shape::Rectangles {
+            conn.send_request_unchecked(&xcb::shape::Rectangles {
                 operation: xcb::shape::So::Set,
                 destination_kind: xcb::shape::Sk::Input,
                 ordering: xcb::x::ClipOrdering::Unsorted,
@@ -434,7 +447,7 @@ impl XWindowInner {
             0
         };
         if r == 0 {
-            conn.send_request_no_reply_log(&xcb::shape::Mask {
+            conn.send_request_unchecked(&xcb::shape::Mask {
                 operation: xcb::shape::So::Set,
                 destination_kind: xcb::shape::Sk::Bounding,
                 destination_window: self.child_id,
@@ -443,7 +456,7 @@ impl XWindowInner {
                 source_bitmap: xcb::x::Pixmap::none(),
             });
         } else {
-            conn.send_request_no_reply_log(&xcb::shape::Rectangles {
+            conn.send_request_unchecked(&xcb::shape::Rectangles {
                 operation: xcb::shape::So::Set,
                 destination_kind: xcb::shape::Sk::Bounding,
                 ordering: xcb::x::ClipOrdering::Unsorted,
@@ -466,8 +479,10 @@ impl XWindowInner {
                 ],
             });
         }
+        let _ = conn.flush();
         self.resize_child(u32::from(inner.0), u32::from(inner.1));
         self.paint_edge(dpi);
+        self.fitted = Some((key, inner));
         inner
     }
 
@@ -512,7 +527,7 @@ impl XWindowInner {
             let row = usize::from(w) * 4;
             let rows = (256 * 1024 / row.max(1)).max(1);
             for (i, chunk) in data.chunks(row * rows).enumerate() {
-                conn.send_request_no_reply_log(&xcb::x::PutImage {
+                conn.send_request_unchecked(&xcb::x::PutImage {
                     format: xcb::x::ImageFormat::ZPixmap,
                     drawable: xcb::x::Drawable::Window(self.window_id),
                     gc,
@@ -852,6 +867,14 @@ impl XWindowInner {
             }
         }
 
+        // a drag moves the window: the same size, the same dpi, nothing to
+        // fit, paint or report (and no round trip to ask for the state:
+        // a state change comes as a PropertyNotify, which has the next
+        // paint query it)
+        if self.edge.is_some() && (width, height) == self.outer && dpi == self.dpi {
+            return Ok(());
+        }
+
         // the X window's size in, the content's from here on
         let state = self.get_window_state().unwrap_or(WindowState::default());
         let (width, height) = self.fit((width, height), state, dpi);
@@ -866,7 +889,10 @@ impl XWindowInner {
             return Ok(());
         }
 
-        self.resize_child(width as u32, height as u32);
+        if self.edge.is_none() {
+            // (with an edge, fit placed the child)
+            self.resize_child(width as u32, height as u32);
+        }
 
         log::trace!(
             "{source}: width {} -> {}, height {} -> {}, dpi {} -> {}",
@@ -881,7 +907,7 @@ impl XWindowInner {
         self.width = width;
         self.height = height;
         self.dpi = dpi;
-        self.last_wm_state = self.get_window_state().unwrap_or(WindowState::default());
+        self.last_wm_state = state;
 
         let dimensions = Dimensions {
             pixel_width: self.width as usize,
@@ -1901,6 +1927,7 @@ impl XWindow {
                 insets,
                 outer: (outer_width.try_into()?, outer_height.try_into()?),
                 edge_painted: None,
+                fitted: None,
                 tiled: false,
                 edge_gc: None,
                 gui_cursor: None,

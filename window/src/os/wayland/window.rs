@@ -729,13 +729,6 @@ impl WaylandWindowInner {
             (content.0 + i32::from(insets.left + insets.right)) as u16,
             (content.1 + i32::from(insets.top + insets.bottom)) as u16,
         );
-        let pixels = e.edge.paint_all(
-            e.focused,
-            outer,
-            insets,
-            f64::from(scale),
-            [header.0, header.1, header.2, header.3],
-        );
         let conn = WaylandConnection::get().unwrap().wayland();
         let qh = conn.event_queue.borrow().handle();
         let wayland_state = conn.wayland_state.borrow();
@@ -751,7 +744,15 @@ impl WaylandWindowInner {
             return;
         };
         // the slot may be larger than asked for
-        canvas[..pixels.len()].copy_from_slice(&pixels);
+        let len = (w * h * 4) as usize;
+        e.edge.paint_all_into(
+            e.focused,
+            outer,
+            insets,
+            f64::from(scale),
+            [header.0, header.1, header.2, header.3],
+            &mut canvas[..len],
+        );
         let s = |px: u16| i32::from(px) / scale;
         e.surface.attach(Some(buffer.wl_buffer()), 0, 0);
         e.surface.set_buffer_scale(scale);
