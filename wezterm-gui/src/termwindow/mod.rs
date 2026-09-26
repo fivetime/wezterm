@@ -598,6 +598,8 @@ impl TermWindow {
         self.render_state = None;
 
         let render_info = ctx.renderer_info();
+        // which front end and GPU really draw (WEZTERM_LOG=wezterm_gui=debug)
+        log::debug!("renderer: {render_info}");
         self.opengl_info.replace(render_info.clone());
 
         match RenderState::new(ctx, &self.fonts, &self.render_metrics, ATLAS_SIZE) {
