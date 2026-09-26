@@ -1140,31 +1140,51 @@ impl LocalPane {
                     .unwrap_or(true);
 
             if expired {
-                if policy == CachePolicy::AllowStale && proc_list.is_some() {
-                    // Stale will do: hand back what we have and refresh it
-                    // on a thread of its own. Walking the process tree
-                    // enumerates every process on the system (Windows'
-                    // Toolhelp snapshot, /proc on Linux), and a window
-                    // with many panes asks for every pane's whenever its
-                    // titles are refreshed: done here, on the GUI thread,
-                    // that stalled the whole window.
+                if policy == CachePolicy::AllowStale {
+                    // Stale will do: hand back what we have (nothing, the
+                    // first time: the title is then the command's) and
+                    // refresh it on a thread of its own. Walking the
+                    // process tree enumerates every process on the system
+                    // (Windows' Toolhelp snapshot, /proc on Linux), and a
+                    // window with many panes asks for every pane's
+                    // whenever its titles are refreshed: done here, on the
+                    // GUI thread, that stalled the whole window. When the
+                    // refresh changes what a title shows (the foreground
+                    // process, its directory), the window is told.
                     use std::sync::atomic::Ordering;
                     if !self.proc_list_refreshing.swap(true, Ordering::AcqRel) {
                         let pid = *pid;
+                        let pane_id = self.pane_id;
                         let cache = Arc::clone(&self.proc_list);
                         let refreshing = Arc::clone(&self.proc_list_refreshing);
                         let spawned =
                             std::thread::Builder::new()
                                 .name("procinfo".into())
                                 .spawn(move || {
+                                    let mut changed = false;
                                     if let Some(root) = LocalProcessInfo::with_root_pid(pid) {
-                                        *cache.lock() = Some(CachedProcInfo::from_root(root));
+                                        let fresh = CachedProcInfo::from_root(root);
+                                        let mut cache = cache.lock();
+                                        changed = cache.as_ref().map_or(true, |old| {
+                                            old.foreground.name != fresh.foreground.name
+                                                || old.foreground.cwd != fresh.foreground.cwd
+                                        });
+                                        *cache = Some(fresh);
                                     }
                                     refreshing.store(false, Ordering::Release);
+                                    if changed {
+                                        Mux::notify_from_any_thread(MuxNotification::Alert {
+                                            pane_id,
+                                            alert: Alert::CurrentWorkingDirectoryChanged,
+                                        });
+                                    }
                                 });
                         if spawned.is_err() {
                             self.proc_list_refreshing.store(false, Ordering::Release);
                         }
+                    }
+                    if proc_list.is_none() {
+                        return None;
                     }
                 } else {
                     log::trace!("CachedProcInfo expired, refresh");

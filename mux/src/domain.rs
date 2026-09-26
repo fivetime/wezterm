@@ -200,7 +200,9 @@ pub trait Domain: Downcast + Send + Sync {
 impl_downcast!(Domain);
 
 pub struct LocalDomain {
-    pty_system: Mutex<Box<dyn PtySystem + Send>>,
+    /// (shared with the thread that opens a pane's pty and starts its
+    /// process, see `spawn_pane`)
+    pty_system: Arc<Mutex<Box<dyn PtySystem + Send>>>,
     id: DomainId,
     name: String,
 }
@@ -219,7 +221,15 @@ impl LocalDomain {
     }
 
     fn resolve_wsl_domain(&self) -> Option<WslDomain> {
-        config::configuration()
+        let config = config::configuration();
+        // Without configured WSL domains the default ones are listed by
+        // running `wsl.exe -l -v`, a process (100+ ms, on the GUI thread
+        // for every new tab); they are all named "WSL:<distribution>",
+        // so a domain named otherwise (the local one) is none of them.
+        if config.wsl_domains.is_none() && !self.name.starts_with("WSL:") {
+            return None;
+        }
+        config
             .wsl_domains()
             .iter()
             .find(|d| d.name == self.name)
@@ -229,7 +239,7 @@ impl LocalDomain {
     pub fn with_pty_system(name: &str, pty_system: Box<dyn PtySystem + Send>) -> Self {
         let id = alloc_domain_id();
         Self {
-            pty_system: Mutex::new(pty_system),
+            pty_system: Arc::new(Mutex::new(pty_system)),
             id,
             name: name.to_string(),
         }
@@ -433,7 +443,12 @@ impl LocalDomain {
             // that doesn't exist on the local system, process spawning can fail.
             // Another situation is `sudo -i` has the pane with set to a cwd
             // that is not accessible to the user.
-            if let Err(err) = Path::new(&dir).read_dir() {
+            // (on a thread of its own: a network drive, a sleeping disk)
+            let readable = {
+                let dir = dir.clone();
+                smol::unblock(move || Path::new(&dir).read_dir().map(|_| ())).await
+            };
+            if let Err(err) = readable {
                 log::warn!(
                     "Directory {:?} is not readable and will not be \
                      used for the command we are spawning: {:#}",
@@ -598,10 +613,6 @@ impl Domain for LocalDomain {
             .build_command(command, command_dir, pane_id)
             .await
             .context("build_command")?;
-        let pair = self
-            .pty_system
-            .lock()
-            .openpty(crate::terminal_size_to_pty_size(size)?)?;
 
         let command_line = cmd
             .as_unix_command_line()
@@ -615,8 +626,21 @@ impl Domain for LocalDomain {
             },
             self.name
         );
-        let child_result = pair.slave.spawn_command(cmd);
-        let mut writer = WriterWrapper::new(pair.master.take_writer()?);
+        // The pty and the process on a thread of their own: ConPTY starts
+        // a conhost process, then the command's (and whatever watches
+        // process creation looks at both), tens of milliseconds and more
+        // that the window, which awaits this, would otherwise be frozen
+        // for. The pane is made here once they exist.
+        let pty_system = Arc::clone(&self.pty_system);
+        let pty_size = crate::terminal_size_to_pty_size(size)?;
+        let (master, child_result, writer) = smol::unblock(move || -> anyhow::Result<_> {
+            let pair = pty_system.lock().openpty(pty_size)?;
+            let child_result = pair.slave.spawn_command(cmd);
+            let writer = pair.master.take_writer()?;
+            Ok((pair.master, child_result, writer))
+        })
+        .await?;
+        let mut writer = WriterWrapper::new(writer);
 
         let mut terminal = wezterm_term::Terminal::new(
             size,
@@ -634,7 +658,7 @@ impl Domain for LocalDomain {
                 pane_id,
                 terminal,
                 child,
-                pair.master,
+                master,
                 Box::new(writer),
                 self.id,
                 command_description,
@@ -649,7 +673,7 @@ impl Domain for LocalDomain {
                     terminal,
                     Box::new(FailedProcessSpawn {}),
                     Box::new(FailedSpawnPty {
-                        inner: Mutex::new(pair.master),
+                        inner: Mutex::new(master),
                     }),
                     Box::new(writer),
                     self.id,

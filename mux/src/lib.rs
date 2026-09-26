@@ -1160,37 +1160,35 @@ impl Mux {
         Ok(domain)
     }
 
-    fn resolve_cwd(
+    /// The directory a new pane starts in: `command_dir`, else `pane`'s
+    /// (when it is in `target_domain`). Asking a local pane means reading
+    /// its process table (FetchImmediate: a snapshot of every process on
+    /// Windows), so it is asked on a thread of its own.
+    async fn resolve_cwd(
         &self,
         command_dir: Option<String>,
         pane: Option<Arc<dyn Pane>>,
         target_domain: DomainId,
         policy: CachePolicy,
     ) -> Option<String> {
-        command_dir.or_else(|| {
-            match pane {
-                Some(pane) if pane.domain_id() == target_domain => pane
-                    .get_current_working_dir(policy)
-                    .and_then(|url| {
-                        percent_decode_str(url.path())
-                            .decode_utf8()
-                            .ok()
-                            .map(|path| path.into_owned())
-                    })
-                    .map(|path| {
-                        // On Windows the file URI can produce a path like:
-                        // `/C:\Users` which is valid in a file URI, but the leading slash
-                        // is not liked by the windows file APIs, so we strip it off here.
-                        let bytes = path.as_bytes();
-                        if bytes.len() > 2 && bytes[0] == b'/' && bytes[2] == b':' {
-                            path[1..].to_owned()
-                        } else {
-                            path
-                        }
-                    }),
-                _ => None,
-            }
-        })
+        if command_dir.is_some() {
+            return command_dir;
+        }
+        let pane = pane.filter(|pane| pane.domain_id() == target_domain)?;
+        let url = smol::unblock(move || pane.get_current_working_dir(policy)).await?;
+        let path = percent_decode_str(url.path())
+            .decode_utf8()
+            .ok()?
+            .into_owned();
+        // On Windows the file URI can produce a path like:
+        // `/C:\Users` which is valid in a file URI, but the leading slash
+        // is not liked by the windows file APIs, so we strip it off here.
+        let bytes = path.as_bytes();
+        if bytes.len() > 2 && bytes[0] == b'/' && bytes[2] == b':' {
+            Some(path[1..].to_owned())
+        } else {
+            Some(path)
+        }
     }
 
     pub async fn split_pane(
@@ -1224,12 +1222,14 @@ impl Mux {
                 command_dir,
             } => SplitSource::Spawn {
                 command,
-                command_dir: self.resolve_cwd(
-                    command_dir,
-                    Some(Arc::clone(&current_pane)),
-                    domain.domain_id(),
-                    CachePolicy::FetchImmediate,
-                ),
+                command_dir: self
+                    .resolve_cwd(
+                        command_dir,
+                        Some(Arc::clone(&current_pane)),
+                        domain.domain_id(),
+                        CachePolicy::FetchImmediate,
+                    )
+                    .await,
             },
             other => other,
         };
@@ -1356,26 +1356,28 @@ impl Mux {
             domain.attach(Some(window_id)).await?;
         }
 
-        let cwd = self.resolve_cwd(
-            command_dir,
-            match current_pane_id {
-                Some(id) => {
-                    // Only use the cwd from the current pane if the domain
-                    // is the same as the one we are spawning into
-                    let (current_domain_id, _, _) = self
-                        .resolve_pane_id(id)
-                        .ok_or_else(|| anyhow!("pane_id {} invalid", id))?;
-                    if current_domain_id == domain.domain_id() {
-                        self.get_pane(id)
-                    } else {
-                        None
+        let cwd = self
+            .resolve_cwd(
+                command_dir,
+                match current_pane_id {
+                    Some(id) => {
+                        // Only use the cwd from the current pane if the domain
+                        // is the same as the one we are spawning into
+                        let (current_domain_id, _, _) = self
+                            .resolve_pane_id(id)
+                            .ok_or_else(|| anyhow!("pane_id {} invalid", id))?;
+                        if current_domain_id == domain.domain_id() {
+                            self.get_pane(id)
+                        } else {
+                            None
+                        }
                     }
-                }
-                None => None,
-            },
-            domain.domain_id(),
-            CachePolicy::FetchImmediate,
-        );
+                    None => None,
+                },
+                domain.domain_id(),
+                CachePolicy::FetchImmediate,
+            )
+            .await;
 
         let tab = domain
             .spawn(size, command.clone(), cwd.clone(), window_id)
