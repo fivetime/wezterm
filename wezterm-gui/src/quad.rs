@@ -105,6 +105,11 @@ pub trait QuadTrait {
 
     fn set_hsv(&mut self, hsv: Option<HsbTransform>);
     fn set_position(&mut self, left: f32, top: f32, right: f32, bottom: f32);
+
+    /// Multiplies the colours' alpha by `left` at the left edge and by
+    /// `right` at the right one (interpolated across): a linear fade.
+    /// Must be called after the colours are set.
+    fn fade(&mut self, left: f32, right: f32);
 }
 
 pub enum QuadImpl<'a> {
@@ -152,6 +157,13 @@ impl<'a> QuadTrait for QuadImpl<'a> {
         match self {
             Self::Vert(q) => q.set_position(left, top, right, bottom),
             Self::Boxed(q) => q.set_position(left, top, right, bottom),
+        }
+    }
+
+    fn fade(&mut self, left: f32, right: f32) {
+        match self {
+            Self::Vert(q) => q.fade(left, right),
+            Self::Boxed(q) => q.fade(left, right),
         }
     }
 }
@@ -204,6 +216,18 @@ impl<'a> QuadTrait for Quad<'a> {
         self.vert[V_TOP_RIGHT].position = [right, top];
         self.vert[V_BOT_LEFT].position = [left, bottom];
         self.vert[V_BOT_RIGHT].position = [right, bottom];
+    }
+
+    fn fade(&mut self, left: f32, right: f32) {
+        for (i, alpha) in [
+            (V_TOP_LEFT, left),
+            (V_BOT_LEFT, left),
+            (V_TOP_RIGHT, right),
+            (V_BOT_RIGHT, right),
+        ] {
+            self.vert[i].fg_color[3] *= alpha;
+            self.vert[i].alt_color[3] *= alpha;
+        }
     }
 }
 
@@ -258,6 +282,13 @@ impl QuadTrait for BoxedQuad {
 
     fn set_position(&mut self, left: f32, top: f32, right: f32, bottom: f32) {
         self.position = (left, top, right, bottom);
+    }
+
+    /// (one colour for the whole quad here: the fade's mean)
+    fn fade(&mut self, left: f32, right: f32) {
+        let alpha = (left + right) / 2.;
+        self.fg_color[3] *= alpha;
+        self.alt_color[3] *= alpha;
     }
 }
 

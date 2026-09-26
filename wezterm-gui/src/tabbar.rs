@@ -518,7 +518,15 @@ impl TabBarState {
             // We need to clamp the length to balance them out
             available_cells / number_of_tabs
         }
-        .min(config.tab_max_width);
+        // Chrome's strip gives a title its tab's room and fades what
+        // does not fit (`Element::fade_tail`), rather than a count of cells
+        .min(
+            if config.use_fancy_tab_bar && config.tab_strip_style == config::TabStripStyle::Chrome {
+                usize::MAX
+            } else {
+                config.tab_max_width
+            },
+        );
 
         let mut line = Line::with_width(0, SEQ_ZERO);
 

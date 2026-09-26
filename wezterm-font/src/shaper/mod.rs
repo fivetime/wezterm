@@ -67,6 +67,10 @@ pub struct FontMetrics {
     pub cap_height_ratio: Option<f64>,
     pub cap_height: Option<PixelLength>,
 
+    /// The font's average character width (its OS/2 table's
+    /// xAvgCharWidth), when it has one
+    pub avg_char_width: Option<PixelLength>,
+
     /// True if the font is scalable and this is a scaled metric.
     /// False if the font only has bitmap strikes and what we
     /// have here is a best approximation.

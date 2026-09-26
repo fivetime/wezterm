@@ -143,6 +143,12 @@ impl crate::TermWindow {
         // Chrome's strip in pixels (the chrome-strip crate): every size
         // and position below comes from it
         let layout = self.chrome_layout(&font, &metrics)?;
+        // a title too long for its tab fades out at its end, as Chrome's
+        let title_fade = if chrome {
+            expected_char_width(&font)
+        } else {
+            None
+        };
         // the tabs among the items, in order: each takes its own layout
         let mut tab_no = 0usize;
         let tab_vertical_alignment = if self.config.tab_bar_at_bottom || chrome {
@@ -817,7 +823,8 @@ impl crate::TermWindow {
                                             top: Dimension::Pixels(title_top),
                                             bottom: dip(0.),
                                         })
-                                        .max_width(Some(Dimension::Pixels(room.max(0.)))),
+                                        .max_width(Some(Dimension::Pixels(room.max(0.))))
+                                        .fade_tail(title_fade),
                                 );
                             }
                             if let Some(t) = t.as_ref().filter(|_| chrome) {
@@ -970,6 +977,41 @@ impl crate::TermWindow {
 
         Ok(ui_items)
     }
+}
+
+/// The expected width of a character of `font`, which sets how long a
+/// faded title's fade is: `gfx::PlatformFont::GetExpectedTextWidth(1)`.
+/// Linux, the font's average character width (OS/2 xAvgCharWidth, as
+/// Skia's FreeType metrics give it), else the width of 'x'
+/// (PlatformFontSkia); Windows, the width of 'x' (DirectWrite gives Skia
+/// no average); macOS, the mean width of the lowercase letters
+/// (PlatformFontMac).
+fn expected_char_width(font: &Rc<LoadedFont>) -> Option<f32> {
+    let measure = |text: &str| -> Option<f32> {
+        let infos = font
+            .shape(
+                text,
+                || {},
+                |_| {},
+                None,
+                wezterm_bidi::Direction::LeftToRight,
+                None,
+                None,
+            )
+            .ok()?;
+        Some(infos.iter().map(|i| i.x_advance.get() as f32).sum())
+    };
+    let width = if cfg!(target_os = "macos") {
+        measure("abcdefghijklmnopqrstuvwxyz").map(|w| w / 26.)
+    } else if cfg!(windows) {
+        measure("x")
+    } else {
+        font.metrics()
+            .avg_char_width
+            .map(|w| w.get() as f32)
+            .or_else(|| measure("x"))
+    };
+    width.filter(|w| *w > 0.)
 }
 
 impl crate::TermWindow {

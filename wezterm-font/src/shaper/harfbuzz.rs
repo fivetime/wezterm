@@ -625,6 +625,7 @@ impl FontShaper for HarfbuzzShaper {
 
         let selected_size = pair.face.set_font_size(size * scale, dpi)?;
         let y_scale = unsafe { (*(*pair.face.face).size).metrics.y_scale.to_num::<f64>() };
+        let x_scale = unsafe { (*(*pair.face.face).size).metrics.x_scale.to_num::<f64>() };
         let mut metrics = FontMetrics {
             cell_height: PixelLength::new(selected_size.height),
             cell_width: PixelLength::new(selected_size.width),
@@ -641,6 +642,11 @@ impl FontShaper for HarfbuzzShaper {
             ),
             cap_height_ratio: selected_size.cap_height_to_height_ratio,
             cap_height: selected_size.cap_height.map(PixelLength::new),
+            // (as Skia's FreeType metrics give it: fAvgCharWidth)
+            avg_char_width: pair
+                .face
+                .avg_char_width_units()
+                .map(|units| PixelLength::new(units * x_scale / 64.)),
             is_scaled: selected_size.is_scaled,
             presentation: pair.presentation,
             force_y_adjust: PixelLength::new(0.),

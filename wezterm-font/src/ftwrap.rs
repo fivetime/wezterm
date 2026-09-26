@@ -327,6 +327,13 @@ impl Face {
         }
     }
 
+    /// The OS/2 table's average character width (xAvgCharWidth), in
+    /// font units, if the font has one
+    pub fn avg_char_width_units(&self) -> Option<f64> {
+        let os2 = self.get_os2_table()?;
+        (os2.xAvgCharWidth > 0).then_some(os2.xAvgCharWidth as f64)
+    }
+
     pub fn weight_and_width(&self) -> (u16, u16) {
         let (mut weight, mut width) = self
             .get_os2_table()

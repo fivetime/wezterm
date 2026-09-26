@@ -682,6 +682,7 @@ impl crate::TermWindow {
             hover_colors: None,
             padding: background_rect,
             content_rect,
+            fade: None,
             baseline: 1.0,
             content: ComputedElementContent::Children(vec![]),
         })

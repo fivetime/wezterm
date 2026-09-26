@@ -20,6 +20,7 @@ use wezterm_font::units::PixelUnit;
 use wezterm_font::LoadedFont;
 use wezterm_term::color::{ColorAttribute, ColorPalette};
 use window::bitmaps::atlas::Sprite;
+use window::bitmaps::TextureRect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VerticalAlign {
@@ -261,6 +262,12 @@ pub struct Element {
     pub max_width: Option<Dimension>,
     pub min_width: Option<Dimension>,
     pub min_height: Option<Dimension>,
+    /// Text wider than the element is drawn to its edge and faded out
+    /// over its last few characters, as Chrome's tab titles are
+    /// (gfx::FADE_TAIL); the font's expected character width in pixels
+    /// (`gfx::PlatformFont::GetExpectedTextWidth(1)`), which sets how long
+    /// the fade is
+    pub fade_tail: Option<f32>,
 }
 
 impl Element {
@@ -284,6 +291,7 @@ impl Element {
             max_width: None,
             min_width: None,
             min_height: None,
+            fade_tail: None,
         }
     }
 
@@ -409,6 +417,12 @@ impl Element {
         self.min_height = height;
         self
     }
+
+    /// See `fade_tail`
+    pub fn fade_tail(mut self, expected_char_width: Option<f32>) -> Self {
+        self.fade_tail = expected_char_width;
+        self
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -434,6 +448,10 @@ pub enum ElementContent {
         height: Dimension,
     },
 }
+
+/// The width a fading element's children are laid out in: all of their
+/// text, which is cut at the element's edge when drawn
+const OVERFLOW_WIDTH: f32 = 1_000_000.;
 
 pub struct LayoutContext<'a> {
     pub width: DimensionContext,
@@ -461,8 +479,72 @@ pub struct ComputedElement {
     /// The outer bounds of the content
     pub content_rect: RectF,
     pub baseline: f32,
+    /// Its text overflows it and fades out at its end (`Element::fade_tail`)
+    pub fade: Option<Fade>,
 
     pub content: ComputedElementContent,
+}
+
+/// How text that overflows an element fades out towards its right edge
+/// (gfx::RenderText::ApplyFadeEffects, CreateFadeShader): linearly over
+/// `width` pixels, down to `end_alpha`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fade {
+    pub width: f32,
+    pub end_alpha: f32,
+}
+
+impl Fade {
+    /// The fade of text in a `display_width`-wide rect, for a font of
+    /// `char_width` expected character width: over about three characters
+    /// (a third of the width, when very narrow), to transparent, but when
+    /// fewer than four characters fit, to up to 20 % (51 of 255) at no
+    /// width, so the last faded characters stay a little legible
+    /// (`CalculateFadeGradientWidth`, `CreateFadeShader`)
+    pub fn new(char_width: f32, display_width: f32) -> Option<Self> {
+        // GetExpectedTextWidth(n): round(n * average) with Skia's fonts,
+        // ceil on the Mac
+        let expected = |n: f32| {
+            if cfg!(target_os = "macos") {
+                (n * char_width).ceil()
+            } else {
+                (n * char_width).round()
+            }
+        };
+        let width = expected(3.).min((display_width / 3.).round());
+        if width <= 0. {
+            return None;
+        }
+        let four = expected(4.);
+        let fraction = if four > 0. { display_width / four } else { 1. };
+        let end_alpha = if fraction < 1. {
+            ((1. - fraction) * 51.).round() / 255.
+        } else {
+            0.
+        };
+        Some(Self { width, end_alpha })
+    }
+}
+
+/// A fade for the text of an element's descendants: `Fade` ending at the
+/// element's content's right edge `right`, where the text is cut.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FadeClip {
+    right: f32,
+    fade: Fade,
+}
+
+impl FadeClip {
+    /// The text's opacity at `x`
+    fn alpha(&self, x: f32) -> f32 {
+        let start = self.right - self.fade.width;
+        if x <= start {
+            1.
+        } else {
+            let t = ((x - start) / self.fade.width).min(1.);
+            1. + (self.fade.end_alpha - 1.) * t
+        }
+    }
 }
 
 impl ComputedElement {
@@ -735,10 +817,14 @@ impl super::TermWindow {
                     border_rect: rects.border_rect,
                     padding: rects.padding,
                     content_rect: rects.content_rect,
+                    fade: None,
                     content: ComputedElementContent::Text(computed_cells),
                 })
             }
             ElementContent::Children(kids) => {
+                // a fading element's text runs on past its edge, to be
+                // cut there when drawn (`render_text_quad`)
+                let overflow = element.fade_tail.is_some();
                 let mut block_pixel_width: f32 = 0.;
                 let mut block_pixel_height: f32 = 0.;
                 let mut computed_kids = vec![];
@@ -754,6 +840,12 @@ impl super::TermWindow {
                     }
 
                     let bounds = match child.float {
+                        Float::None if overflow => euclid::rect(
+                            block_pixel_width,
+                            y_coord,
+                            OVERFLOW_WIDTH,
+                            context.bounds.max_y() - (context.bounds.min_y() + y_coord),
+                        ),
                         Float::None => euclid::rect(
                             block_pixel_width,
                             y_coord,
@@ -776,7 +868,7 @@ impl super::TermWindow {
                             width: DimensionContext {
                                 dpi: context.width.dpi,
                                 pixel_cell: context.width.pixel_cell,
-                                pixel_max: max_width,
+                                pixel_max: if overflow { OVERFLOW_WIDTH } else { max_width },
                             },
                             zindex: context.zindex + element.zindex,
                         },
@@ -831,6 +923,10 @@ impl super::TermWindow {
 
                 computed_kids.sort_by(|a, b| a.zindex.cmp(&b.zindex));
 
+                let fade = element
+                    .fade_tail
+                    .filter(|_| max_x > max_width + 0.5)
+                    .and_then(|char_width| Fade::new(char_width, max_width));
                 let content_rect = euclid::rect(0., 0., max_x.min(max_width), pixel_height);
                 let rects = element.compute_rects(context, content_rect);
 
@@ -850,6 +946,7 @@ impl super::TermWindow {
                     border_rect: rects.border_rect,
                     padding: rects.padding,
                     content_rect: rects.content_rect,
+                    fade,
                     content: ComputedElementContent::Children(computed_kids),
                 })
             }
@@ -870,6 +967,7 @@ impl super::TermWindow {
                     border_rect: rects.border_rect,
                     padding: rects.padding,
                     content_rect: rects.content_rect,
+                    fade: None,
                     content: ComputedElementContent::Poly {
                         poly,
                         line_width: *line_width,
@@ -893,6 +991,7 @@ impl super::TermWindow {
                     border_rect: rects.border_rect,
                     padding: rects.padding,
                     content_rect: rects.content_rect,
+                    fade: None,
                     content: ComputedElementContent::Icon {
                         path: path.clone(),
                         size,
@@ -923,6 +1022,7 @@ impl super::TermWindow {
                     border_rect: rects.border_rect,
                     padding: rects.padding,
                     content_rect: rects.content_rect,
+                    fade: None,
                     content: ComputedElementContent::Image {
                         normal: normal.clone(),
                         hover: hover.clone(),
@@ -950,38 +1050,46 @@ impl super::TermWindow {
         inherited_colors: Option<&ElementColors>,
     ) -> anyhow::Result<()> {
         let mut flat = vec![];
-        self.flatten_element(element, inherited_colors.cloned(), &mut flat);
-        let mut zindexes: Vec<i8> = flat.iter().map(|(e, _)| e.zindex).collect();
+        self.flatten_element(element, inherited_colors.cloned(), None, &mut flat);
+        let mut zindexes: Vec<i8> = flat.iter().map(|(e, _, _)| e.zindex).collect();
         zindexes.sort_unstable();
         zindexes.dedup();
         for zindex in zindexes {
             let layer = gl_state.layer_for_zindex(zindex)?;
             let mut layers = layer.quad_allocator();
-            for (e, inherited) in flat.iter().filter(|(e, _)| e.zindex == zindex) {
-                self.render_one_element(e, &mut layers, inherited.as_ref())?;
+            for (e, inherited, clip) in flat.iter().filter(|(e, _, _)| e.zindex == zindex) {
+                self.render_one_element(e, &mut layers, inherited.as_ref(), *clip)?;
             }
         }
         Ok(())
     }
 
     /// `element` and its descendants in drawing order, each with the
-    /// colours it inherits.
+    /// colours it inherits and the fade its text is cut by, if any.
     fn flatten_element<'e>(
         &self,
         element: &'e ComputedElement,
         inherited: Option<ElementColors>,
-        out: &mut Vec<(&'e ComputedElement, Option<ElementColors>)>,
+        clip: Option<FadeClip>,
+        out: &mut Vec<(&'e ComputedElement, Option<ElementColors>, Option<FadeClip>)>,
     ) {
         if let ComputedElementContent::Children(kids) = &element.content {
             let effective = self
                 .element_colors(element)
                 .inherit_from(inherited.as_ref());
-            out.push((element, inherited));
+            let kids_clip = element
+                .fade
+                .map(|fade| FadeClip {
+                    right: element.content_rect.max_x(),
+                    fade,
+                })
+                .or(clip);
+            out.push((element, inherited, clip));
             for kid in kids {
-                self.flatten_element(kid, Some(effective.clone()), out);
+                self.flatten_element(kid, Some(effective.clone()), kids_clip, out);
             }
         } else {
-            out.push((element, inherited));
+            out.push((element, inherited, clip));
         }
     }
 
@@ -1015,6 +1123,7 @@ impl super::TermWindow {
         element: &ComputedElement,
         layers: &mut TripleLayerQuadAllocator,
         inherited_colors: Option<&ElementColors>,
+        clip: Option<FadeClip>,
     ) -> anyhow::Result<()> {
         let colors = self.element_colors(element);
 
@@ -1023,32 +1132,41 @@ impl super::TermWindow {
         let top = self.dimensions.pixel_height as f32 / -2.0;
         match &element.content {
             ComputedElementContent::Text(cells) => {
+                let text = self.resolve_text(colors, inherited_colors);
+                // where the text stops: the element's end, or, overflowing
+                // a fading element, that element's edge
+                let max_x = match clip {
+                    Some(clip) => clip.right,
+                    None => element.content_rect.max_x(),
+                };
                 let mut pos_x = element.content_rect.min_x();
                 for cell in cells {
-                    if pos_x >= element.content_rect.max_x() {
+                    if pos_x >= max_x {
                         break;
                     }
                     match cell {
                         ElementCell::Sprite(sprite) => {
-                            let width = sprite.coords.width();
-                            let height = sprite.coords.height();
+                            let width = sprite.coords.width() as f32;
+                            let height = sprite.coords.height() as f32;
                             let pos_y = top + element.content_rect.min_y();
 
-                            if pos_x + width as f32 > element.content_rect.max_x() {
+                            if clip.is_none() && pos_x + width > max_x {
                                 break;
                             }
-
-                            let mut quad = layers.allocate(2)?;
-                            quad.set_position(
-                                pos_x + left,
-                                pos_y,
-                                pos_x + left + width as f32,
-                                pos_y + height as f32,
-                            );
-                            self.resolve_text(colors, inherited_colors).apply(&mut quad);
-                            quad.set_texture(sprite.texture_coords());
-                            quad.set_hsv(None);
-                            pos_x += width as f32;
+                            self.render_text_quad(
+                                layers,
+                                2,
+                                (pos_x + left, pos_x + left + width),
+                                (pos_y, pos_y + height),
+                                sprite.texture_coords(),
+                                false,
+                                &text,
+                                clip.map(|c| FadeClip {
+                                    right: c.right + left,
+                                    ..c
+                                }),
+                            )?;
+                            pos_x += width;
                         }
                         ElementCell::Glyph(glyph) => {
                             if let Some(texture) = glyph.texture.as_ref() {
@@ -1056,26 +1174,26 @@ impl super::TermWindow {
                                     - (glyph.y_offset + glyph.bearing_y).get() as f32
                                     + element.baseline;
 
-                                if pos_x + glyph.x_advance.get() as f32
-                                    > element.content_rect.max_x()
-                                {
+                                if clip.is_none() && pos_x + glyph.x_advance.get() as f32 > max_x {
                                     break;
                                 }
                                 let pos_x = pos_x + (glyph.x_offset + glyph.bearing_x).get() as f32;
                                 let width = texture.coords.size.width as f32 * glyph.scale as f32;
                                 let height = texture.coords.size.height as f32 * glyph.scale as f32;
 
-                                let mut quad = layers.allocate(1)?;
-                                quad.set_position(
-                                    pos_x + left,
-                                    pos_y,
-                                    pos_x + left + width,
-                                    pos_y + height,
-                                );
-                                self.resolve_text(colors, inherited_colors).apply(&mut quad);
-                                quad.set_texture(texture.texture_coords());
-                                quad.set_has_color(glyph.has_color);
-                                quad.set_hsv(None);
+                                self.render_text_quad(
+                                    layers,
+                                    1,
+                                    (pos_x + left, pos_x + left + width),
+                                    (pos_y, pos_y + height),
+                                    texture.texture_coords(),
+                                    glyph.has_color,
+                                    &text,
+                                    clip.map(|c| FadeClip {
+                                        right: c.right + left,
+                                        ..c
+                                    }),
+                                )?;
                             }
                             pos_x += glyph.x_advance.get() as f32;
                         }
@@ -1129,6 +1247,70 @@ impl super::TermWindow {
             }
         }
 
+        Ok(())
+    }
+
+    /// A glyph's (or a sprite's) quad at `x` by `y` (window coordinates,
+    /// centred), cut at `clip`'s edge and faded towards it as Chrome fades
+    /// a tab title. The fade is linear in x, so a quad is split where it
+    /// begins and each piece's ends get the fade's opacity at them; a faded
+    /// piece is drawn as a grayscale mask, whose shader multiplies the
+    /// colour's alpha in (the glyph mode takes the alpha from the texture
+    /// alone). A colour emoji is cut but not faded.
+    #[allow(clippy::too_many_arguments)]
+    fn render_text_quad(
+        &self,
+        layers: &mut TripleLayerQuadAllocator,
+        layer: usize,
+        x: (f32, f32),
+        y: (f32, f32),
+        tex: TextureRect,
+        has_color: bool,
+        color: &ResolvedColor,
+        clip: Option<FadeClip>,
+    ) -> anyhow::Result<()> {
+        let (x0, x1) = x;
+        let (u0, u1, v0, v1) = (tex.min_x(), tex.max_x(), tex.min_y(), tex.max_y());
+        let u_at = |x: f32| {
+            if x1 > x0 {
+                u0 + (u1 - u0) * (x - x0) / (x1 - x0)
+            } else {
+                u0
+            }
+        };
+        let mut edges = [x0, x1, x1];
+        let mut pieces = 1;
+        if let Some(clip) = clip {
+            if x0 >= clip.right {
+                return Ok(());
+            }
+            let end = x1.min(clip.right);
+            let start = clip.right - clip.fade.width;
+            if start > x0 && start < end {
+                edges = [x0, start, end];
+                pieces = 2;
+            } else {
+                edges = [x0, end, end];
+            }
+        }
+        for i in 0..pieces {
+            let (a, b) = (edges[i], edges[i + 1]);
+            if b <= a {
+                continue;
+            }
+            let mut quad = layers.allocate(layer)?;
+            quad.set_position(a, y.0, b, y.1);
+            color.apply(&mut quad);
+            quad.set_texture_discrete(u_at(a), u_at(b), v0, v1);
+            quad.set_hsv(None);
+            let (alpha_a, alpha_b) = clip.map_or((1., 1.), |c| (c.alpha(a), c.alpha(b)));
+            if !has_color && (alpha_a < 1. || alpha_b < 1.) {
+                quad.set_grayscale();
+                quad.fade(alpha_a, alpha_b);
+            } else {
+                quad.set_has_color(has_color);
+            }
+        }
         Ok(())
     }
 
@@ -1428,5 +1610,46 @@ impl super::TermWindow {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// gfx's fade: over three expected characters, a third of the width
+    /// when narrow, to transparent, or (fewer than four characters wide)
+    /// to up to 51/255 at no width
+    #[test]
+    fn fade_as_chrome() {
+        // 8 px characters: 24 px of fade, to nothing
+        assert_eq!(
+            Fade::new(8., 200.),
+            Some(Fade {
+                width: 24.,
+                end_alpha: 0.
+            })
+        );
+        // 20 px wide: a third of it (7), and 20/32 of four characters,
+        // so 51 * (1 - 0.625) = 19 of 255 left at the end
+        assert_eq!(
+            Fade::new(8., 20.),
+            Some(Fade {
+                width: 7.,
+                end_alpha: 19. / 255.
+            })
+        );
+        assert_eq!(Fade::new(8., 1.), None, "no room for a fade");
+        let clip = FadeClip {
+            right: 100.,
+            fade: Fade {
+                width: 20.,
+                end_alpha: 0.,
+            },
+        };
+        assert_eq!(clip.alpha(70.), 1.);
+        assert_eq!(clip.alpha(80.), 1.);
+        assert_eq!(clip.alpha(90.), 0.5);
+        assert_eq!(clip.alpha(100.), 0.);
     }
 }
