@@ -288,8 +288,14 @@ impl crate::TermWindow {
         Ok(quad)
     }
 
-    /// A quad filled with `color` in the shape of a Chrome tab (see
-    /// `chrome_tabs::shape`) covering `rect`.
+    /// Quads filled with `color` in the shape of a Chrome tab (see
+    /// `chrome_tabs::shape`) covering `rect`. A tab at least
+    /// `chrome_tabs::slices`' width is drawn in three pieces from one
+    /// picture of that width: its two ends as they are and one column of
+    /// its straight middle stretched across, so the pictures kept (in the
+    /// glyph atlas, which frees nothing until it is full and rebuilt
+    /// whole) do not grow with every width a resize or a new tab gives
+    /// the tabs. A narrower one is drawn whole.
     pub fn tab_shape_quad(
         &self,
         layers: &mut TripleLayerQuadAllocator,
@@ -304,26 +310,50 @@ impl crate::TermWindow {
         let top_offset = self.dimensions.pixel_height as f32 / 2.;
         let gl_state = self.render_state.as_ref().unwrap();
         let (w, h) = (rect.width().round() as u32, rect.height().round() as u32);
-        let sprite = gl_state.glyph_cache.borrow_mut().cached_tab_shape(
-            w,
-            h,
-            top.round() as u32,
-            foot.round() as u32,
-            outline,
-        )?;
-        let mut quad = layers.allocate(layer_num)?;
+        let (top, foot) = (top.round() as u32, foot.round() as u32);
         let (x, y) = (rect.min_x().round(), rect.min_y().round());
-        quad.set_position(
-            x - left_offset,
-            y - top_offset,
-            x + w as f32 - left_offset,
-            y + h as f32 - top_offset,
-        );
-        quad.set_texture(sprite.texture_coords());
-        quad.set_fg_color(color);
-        quad.set_alt_color_and_mix_value(color, 0.);
-        quad.set_hsv(None);
-        quad.set_has_color(false);
+        let (cap, sliced) = crate::termwindow::render::chrome_tabs::slices(top, foot);
+        // (picture's x, width) drawn at (x, width)
+        let (picture_w, pieces) = if w >= sliced {
+            (
+                sliced,
+                vec![
+                    (0, cap, 0, cap),
+                    (cap, 1, cap, w - 2 * cap),
+                    (sliced - cap, cap, w - cap, cap),
+                ],
+            )
+        } else {
+            (w, vec![(0, w, 0, w)])
+        };
+        let sprite = gl_state
+            .glyph_cache
+            .borrow_mut()
+            .cached_tab_shape(picture_w, h, top, foot, outline)?;
+        for (sx, sw, qx, qw) in pieces {
+            if sw == 0 || qw == 0 {
+                continue;
+            }
+            let mut quad = layers.allocate(layer_num)?;
+            let qx = x + qx as f32;
+            quad.set_position(
+                qx - left_offset,
+                y - top_offset,
+                qx + qw as f32 - left_offset,
+                y + h as f32 - top_offset,
+            );
+            let origin = sprite.coords.origin;
+            quad.set_texture(sprite.texture.to_texture_coords(euclid::rect(
+                origin.x + sx as isize,
+                origin.y,
+                sw as isize,
+                sprite.coords.size.height,
+            )));
+            quad.set_fg_color(color);
+            quad.set_alt_color_and_mix_value(color, 0.);
+            quad.set_hsv(None);
+            quad.set_has_color(false);
+        }
         Ok(())
     }
 

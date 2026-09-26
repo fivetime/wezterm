@@ -131,11 +131,24 @@ pub fn shape(w: u32, h: u32, top: f32, foot: f32, outline: bool) -> window::bitm
     }
     let mask: Vec<u8> = pixmap
         .data()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|p| [p[3]; 4])
         .collect();
     image = window::bitmaps::Image::from_raw(w.max(1) as usize, h.max(1) as usize, mask);
     image
+}
+
+/// How a tab shape of `top` radius and `foot` pixels is drawn in pieces:
+/// the width of each end (its foot and its top corner, with a pixel to
+/// spare) and the width of the one picture the pieces come from. From
+/// that width on the shape is not narrowed anywhere (`shape` clamps its
+/// radii for narrow tabs), so a wider tab is the same two ends with a
+/// longer straight middle between them.
+pub fn slices(top: u32, foot: u32) -> (u32, u32) {
+    let cap = foot + top + 1;
+    (cap, (2 * cap + 1).max(4 * foot))
 }
 
 /// A window's round top corner over its `r`-pixel corner square, as a
@@ -175,6 +188,49 @@ pub fn corner_mask(r: u32, right: bool) -> window::bitmaps::Image {
 mod tests {
     use super::*;
     use window::bitmaps::BitmapImage;
+
+    /// A wide tab drawn in pieces is the tab drawn whole: its ends are the
+    /// ends of the pieces' picture, every column between them is the
+    /// picture's middle column; filled and outlined, at 1x and 2x.
+    #[test]
+    fn a_wide_tab_is_its_ends_and_one_stretched_column() {
+        let alpha = |image: &window::bitmaps::Image, x: usize, y: usize| {
+            image.pixel_data_slice()[(y * image.image_dimensions().0 + x) * 4 + 3]
+        };
+        // (no feet: the hover highlight's rounded rectangle)
+        for (h, top, foot) in [
+            (34, 10, 12),
+            (68, 20, 24),
+            (30, 8, 6),
+            (28, 8, 0),
+            (56, 16, 0),
+        ] {
+            let (cap, sliced) = slices(top, foot);
+            for outline in [false, true] {
+                let pieces = shape(sliced, h, top as f32, foot as f32, outline);
+                for w in [sliced, sliced + 1, sliced + 37, 420] {
+                    let whole = shape(w, h, top as f32, foot as f32, outline);
+                    let (w, sliced, cap) = (w as usize, sliced as usize, cap as usize);
+                    for y in 0..h as usize {
+                        for x in 0..w {
+                            let from = if x < cap {
+                                x
+                            } else if x >= w - cap {
+                                sliced - (w - x)
+                            } else {
+                                cap
+                            };
+                            assert_eq!(
+                                alpha(&whole, x, y),
+                                alpha(&pieces, from, y),
+                                "{w} wide, h {h}, outline {outline}, at {x},{y}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     /// The corner mask keeps the inside of the arc and clears the
     /// outside: the corner pixel itself clear, the pixel by the centre
