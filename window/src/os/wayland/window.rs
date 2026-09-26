@@ -311,6 +311,7 @@ impl WaylandWindow {
                 scale: 1,
                 outer: (0, 0),
                 restored: true,
+                tiled: false,
                 focused: true,
             });
 
@@ -639,8 +640,8 @@ pub(crate) fn read_pipe_with_timeout(mut file: ReadPipe) -> anyhow::Result<Strin
 pub(super) struct WaylandEdge {
     edge: crate::os::edge::Edge,
     pub(super) strips: Vec<EdgeStrip>,
-    /// What it shows: the content's size in pixels, focus, scale.
-    painted: Option<((i32, i32), bool, i32)>,
+    /// What it shows: the content's size in pixels, focus, scale, tiled.
+    painted: Option<((i32, i32), bool, i32, bool)>,
     /// The margins and the resize band in pixels at `scale`.
     pub(super) insets: crate::os::edge::Insets,
     pub(super) band: u16,
@@ -648,6 +649,11 @@ pub(super) struct WaylandEdge {
     pub(super) outer: (u16, u16),
     /// The window is restored and focused, as the last configure said.
     restored: bool,
+    /// Tiled (to a side of the screen, or in a tiling layout): Chrome's
+    /// frame keeps the resize band alone then, no shadow and no round
+    /// corners (GetRestoredFrameBorderInsetsLinux with no shadow values,
+    /// BrowserFrameViewLayoutLinux), as the X11 edge does
+    tiled: bool,
     focused: bool,
 }
 
@@ -670,6 +676,7 @@ type StripKey = (
     i32,
     crate::os::edge::Insets,
     (u16, u16),
+    bool,
 );
 
 pub struct WaylandWindowInner {
@@ -740,11 +747,16 @@ impl WaylandWindowInner {
             }
             return;
         }
-        let key = (content, e.focused, scale);
+        let key = (content, e.focused, scale, e.tiled);
         if e.painted == Some(key) || content.0 <= 0 || content.1 <= 0 {
             return;
         }
-        let insets = e.edge.insets(f64::from(scale), true);
+        let tiled = e.tiled;
+        let insets = if tiled {
+            e.edge.band_insets(f64::from(scale))
+        } else {
+            e.edge.insets(f64::from(scale), true)
+        };
         let band = e.edge.band(f64::from(scale));
         let outer = (
             (content.0 + i32::from(insets.left + insets.right)) as u16,
@@ -799,7 +811,7 @@ impl WaylandWindowInner {
                 crate::os::edge::Strip::Top | crate::os::edge::Strip::Bottom => inner,
                 crate::os::edge::Strip::Left | crate::os::edge::Strip::Right => (0, inner.1),
             };
-            let shown = (which, (w, h), focused, scale, insets, along);
+            let shown = (which, (w, h), focused, scale, insets, along, tiled);
             if strip.shown != Some(shown) {
                 let (bw, bh) = (i32::from(w), i32::from(h));
                 let Ok((buffer, canvas)) = pool.create_buffer(
@@ -813,7 +825,12 @@ impl WaylandWindowInner {
                 };
                 // the slot may be larger than asked for
                 let len = (bw * bh * 4) as usize;
-                painter.paint(rect, &mut canvas[..len]);
+                if tiled {
+                    // the band catches the pointer; nothing shows
+                    canvas[..len].fill(0);
+                } else {
+                    painter.paint(rect, &mut canvas[..len]);
+                }
                 strip.surface.attach(Some(buffer.wl_buffer()), 0, 0);
                 strip.surface.set_buffer_scale(scale);
                 strip.surface.damage_buffer(0, 0, bw, bh);
@@ -1092,11 +1109,12 @@ impl WaylandWindowInner {
                 .update_wm_capabilities(window_config.capabilities);
             if let Some(edge) = self.edge.as_mut() {
                 let s = window_config.state;
-                // tiled, maximized or full screen: no shadow, no round corners
-                edge.restored = !s.intersects(
-                    SCTKWindowState::FULLSCREEN
-                        | SCTKWindowState::MAXIMIZED
-                        | SCTKWindowState::TILED_LEFT
+                // maximized or full screen: no edge; tiled: the resize
+                // band alone, no shadow, no round corners
+                edge.restored =
+                    !s.intersects(SCTKWindowState::FULLSCREEN | SCTKWindowState::MAXIMIZED);
+                edge.tiled = s.intersects(
+                    SCTKWindowState::TILED_LEFT
                         | SCTKWindowState::TILED_RIGHT
                         | SCTKWindowState::TILED_TOP
                         | SCTKWindowState::TILED_BOTTOM,
