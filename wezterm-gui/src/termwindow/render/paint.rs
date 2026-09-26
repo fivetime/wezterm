@@ -108,9 +108,14 @@ impl crate::TermWindow {
             }
         }
         log::debug!("paint_impl before call_draw elapsed={:?}", start.elapsed());
+        // the frame's two halves, for periodic_stat_logging: building the
+        // quads, and handing them to the GPU
+        let passes_done = start.elapsed();
+        metrics::histogram!("gui.paint.passes").record(passes_done);
 
         self.call_draw(frame).ok();
         self.last_frame_duration = start.elapsed();
+        metrics::histogram!("gui.paint.draw").record(self.last_frame_duration - passes_done);
         log::debug!(
             "paint_impl elapsed={:?}, fps={}",
             self.last_frame_duration,
@@ -253,6 +258,7 @@ impl crate::TermWindow {
             .context("filled_rectangle for window background")?;
         }
 
+        let panes_timer = crate::stats::Timed::new("paint.panes");
         for pos in panes {
             if pos.is_active {
                 self.update_text_cursor(&pos);
@@ -272,7 +278,9 @@ impl crate::TermWindow {
             }
         }
 
+        drop(panes_timer);
         if self.show_tab_bar {
+            let _t = crate::stats::Timed::new("paint.tab_bar");
             self.paint_tab_bar(&mut layers).context("paint_tab_bar")?;
         }
 

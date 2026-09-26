@@ -935,16 +935,67 @@ impl super::TermWindow {
         }
     }
 
+    /// Renders `element` and its descendants. The tree is walked once to
+    /// list its elements in order, then drawn a layer (zindex) at a time,
+    /// each layer's vertex buffers mapped once: a map waits for the GPU
+    /// to be done with them (milliseconds with OpenGL), and mapping them
+    /// for each element in turn made a tab bar with many tabs cost tens
+    /// of milliseconds a frame. Within a layer the elements keep their
+    /// order; the layers are drawn in zindex order whatever the order
+    /// their quads were made in.
     pub fn render_element<'a>(
         &self,
         element: &ComputedElement,
         gl_state: &RenderState,
         inherited_colors: Option<&ElementColors>,
     ) -> anyhow::Result<()> {
-        let layer = gl_state.layer_for_zindex(element.zindex)?;
-        let mut layers = layer.quad_allocator();
+        let mut flat = vec![];
+        self.flatten_element(element, inherited_colors.cloned(), &mut flat);
+        let mut zindexes: Vec<i8> = flat.iter().map(|(e, _)| e.zindex).collect();
+        zindexes.sort_unstable();
+        zindexes.dedup();
+        for zindex in zindexes {
+            let layer = gl_state.layer_for_zindex(zindex)?;
+            let mut layers = layer.quad_allocator();
+            for (e, inherited) in flat.iter().filter(|(e, _)| e.zindex == zindex) {
+                self.render_one_element(e, &mut layers, inherited.as_ref())?;
+            }
+        }
+        Ok(())
+    }
 
-        let hovering = match &self.current_mouse_event {
+    /// `element` and its descendants in drawing order, each with the
+    /// colours it inherits.
+    fn flatten_element<'e>(
+        &self,
+        element: &'e ComputedElement,
+        inherited: Option<ElementColors>,
+        out: &mut Vec<(&'e ComputedElement, Option<ElementColors>)>,
+    ) {
+        if let ComputedElementContent::Children(kids) = &element.content {
+            let effective = self
+                .element_colors(element)
+                .inherit_from(inherited.as_ref());
+            out.push((element, inherited));
+            for kid in kids {
+                self.flatten_element(kid, Some(effective.clone()), out);
+            }
+        } else {
+            out.push((element, inherited));
+        }
+    }
+
+    /// The colours `element` shows: its hover colours under the pointer.
+    fn element_colors<'e>(&self, element: &'e ComputedElement) -> &'e ElementColors {
+        match &element.hover_colors {
+            Some(hc) if self.is_hovering(element) => hc,
+            _ => &element.colors,
+        }
+    }
+
+    /// Whether the pointer is over `element` (and not captured elsewhere).
+    fn is_hovering(&self, element: &ComputedElement) -> bool {
+        let over = match &self.current_mouse_event {
             Some(event) => {
                 let mouse_x = event.coords.x as f32;
                 let mouse_y = event.coords.y as f32;
@@ -954,13 +1005,20 @@ impl super::TermWindow {
                     && mouse_y <= element.bounds.max_y()
             }
             None => false,
-        } && matches!(self.current_mouse_capture, None | Some(MouseCapture::UI));
-        let colors = match &element.hover_colors {
-            Some(hc) if hovering => hc,
-            _ => &element.colors,
         };
+        over && matches!(self.current_mouse_capture, None | Some(MouseCapture::UI))
+    }
 
-        self.render_element_background(element, colors, &mut layers, inherited_colors)?;
+    /// One element's own quads (its children are drawn in their turn).
+    fn render_one_element(
+        &self,
+        element: &ComputedElement,
+        layers: &mut TripleLayerQuadAllocator,
+        inherited_colors: Option<&ElementColors>,
+    ) -> anyhow::Result<()> {
+        let colors = self.element_colors(element);
+
+        self.render_element_background(element, colors, layers, inherited_colors)?;
         let left = self.dimensions.pixel_width as f32 / -2.0;
         let top = self.dimensions.pixel_height as f32 / -2.0;
         match &element.content {
@@ -1024,18 +1082,12 @@ impl super::TermWindow {
                     }
                 }
             }
-            ComputedElementContent::Children(kids) => {
-                drop(layers);
-
-                let effective = colors.inherit_from(inherited_colors);
-                for kid in kids {
-                    self.render_element(kid, gl_state, Some(&effective))?;
-                }
-            }
+            // (drawn in their own turn, see `render_element`)
+            ComputedElementContent::Children(_) => {}
             ComputedElementContent::Poly { poly, line_width } => {
                 if element.content_rect.width() >= poly.width {
                     let mut quad = self.poly_quad(
-                        &mut layers,
+                        layers,
                         1,
                         element.content_rect.origin,
                         poly.poly,
@@ -1052,7 +1104,7 @@ impl super::TermWindow {
                 let top = element.content_rect.min_y()
                     + ((element.content_rect.height() - size) / 2.).max(0.);
                 let origin = euclid::point2(element.content_rect.min_x(), top.round());
-                if let Some(mut quad) = self.icon_quad(&mut layers, 1, origin, path, *size)? {
+                if let Some(mut quad) = self.icon_quad(layers, 1, origin, path, *size)? {
                     self.resolve_text(colors, inherited_colors).apply(&mut quad);
                 }
             }
@@ -1063,7 +1115,7 @@ impl super::TermWindow {
                 width,
                 height,
             } => {
-                let path = if hovering {
+                let path = if self.is_hovering(element) {
                     hover.as_ref().unwrap_or(normal)
                 } else if self.focused.is_none() {
                     backdrop.as_ref().unwrap_or(normal)
@@ -1073,7 +1125,7 @@ impl super::TermWindow {
                 let top = element.content_rect.min_y()
                     + ((element.content_rect.height() - height) / 2.).max(0.);
                 let origin = euclid::point2(element.content_rect.min_x(), top.round());
-                self.image_quad(&mut layers, 1, origin, path, *width, *height)?;
+                self.image_quad(layers, 1, origin, path, *width, *height)?;
             }
         }
 
