@@ -69,7 +69,6 @@ impl crate::TermWindow {
                 label: Some("nearest bind group"),
             });
 
-        let mut cleared = false;
         let foreground_text_hsb = self.config.foreground_text_hsb;
         let foreground_text_hsb = [
             foreground_text_hsb.hue,
@@ -88,64 +87,68 @@ impl crate::TermWindow {
         )
         .to_arrays_transposed();
 
+        // One render pass for the frame: each non-empty sub-layer is a
+        // draw in it, with its layer's pipeline (a pass and a uniform
+        // buffer per sub-layer, as before, had the GPU load and store the
+        // whole target once for each)
+        let mut draws = vec![];
         for layer in render_state.layers.borrow().iter() {
-            for idx in 0..3 {
-                let vb = &layer.vb.borrow()[idx];
+            let pipeline = if layer.zindex() == ERASE_ZINDEX {
+                &webgpu.erase_pipeline
+            } else if layer.zindex() == MASK_ZINDEX {
+                &webgpu.mask_pipeline
+            } else {
+                &webgpu.render_pipeline
+            };
+            for vb in layer.vb.borrow().iter() {
                 let (vertex_count, index_count) = vb.vertex_index_count();
-                let uniforms;
                 if vertex_count > 0 {
                     vb.upload()?;
                     let (gpu, index) = vb.gpu();
-                    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Render Pass"),
-                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                            view: &view,
-                            resolve_target: None,
-                            ops: wgpu::Operations {
-                                load: if cleared {
-                                    wgpu::LoadOp::Load
-                                } else {
-                                    wgpu::LoadOp::Clear(wgpu::Color {
-                                        r: 0.,
-                                        g: 0.,
-                                        b: 0.,
-                                        a: 0.,
-                                    })
-                                },
-                                store: wgpu::StoreOp::Store,
-                            },
-                        })],
-                        depth_stencil_attachment: None,
-                        occlusion_query_set: None,
-                        timestamp_writes: None,
-                    });
-                    cleared = true;
-
-                    uniforms = webgpu.create_uniform(ShaderUniform {
-                        foreground_text_hsb,
-                        milliseconds,
-                        projection,
-                    });
-
-                    render_pass.set_pipeline(if layer.zindex() == ERASE_ZINDEX {
-                        &webgpu.erase_pipeline
-                    } else if layer.zindex() == MASK_ZINDEX {
-                        &webgpu.mask_pipeline
-                    } else {
-                        &webgpu.render_pipeline
-                    });
-                    render_pass.set_bind_group(0, &uniforms, &[]);
-                    render_pass.set_bind_group(1, &texture_linear_bind_group, &[]);
-                    render_pass.set_bind_group(2, &texture_nearest_bind_group, &[]);
-                    render_pass.set_vertex_buffer(0, gpu.vertices(index).webgpu().slice(..));
-                    render_pass.set_index_buffer(
-                        gpu.indices.webgpu().slice(..),
-                        wgpu::IndexFormat::Uint32,
-                    );
-                    render_pass.draw_indexed(0..index_count as _, 0, 0..1);
+                    draws.push((
+                        pipeline,
+                        wgpu::Buffer::clone(gpu.vertices(index).webgpu()),
+                        wgpu::Buffer::clone(gpu.indices.webgpu()),
+                        index_count as u32,
+                    ));
                 }
-
                 vb.next_index();
+            }
+        }
+
+        let uniforms = webgpu.create_uniform(ShaderUniform {
+            foreground_text_hsb,
+            milliseconds,
+            projection,
+        });
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Render Pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.,
+                            g: 0.,
+                            b: 0.,
+                            a: 0.,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+            });
+            render_pass.set_bind_group(0, &uniforms, &[]);
+            render_pass.set_bind_group(1, &texture_linear_bind_group, &[]);
+            render_pass.set_bind_group(2, &texture_nearest_bind_group, &[]);
+            for (pipeline, vertices, indices, index_count) in &draws {
+                render_pass.set_pipeline(pipeline);
+                render_pass.set_vertex_buffer(0, vertices.slice(..));
+                render_pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(0..*index_count, 0, 0..1);
             }
         }
 

@@ -172,6 +172,25 @@ impl WebGpuTexture {
     }
 }
 
+/// How the surface presents. The window paces its own frames (max_fps),
+/// and the OpenGL backends swap without waiting for the vertical blank;
+/// waiting for it here as well (Fifo) put the two out of step: a frame
+/// due just after a blank waited for the next one, and a 60 fps window
+/// painted 33, `get_current_texture` holding the GUI thread 28 ms a frame
+/// (Vulkan on AMD, Windows). Mailbox neither waits nor tears. Where it is
+/// missing, Windows' DWM composes a window's presents, so Immediate does
+/// not tear there either (59 paints a second, 0.6 ms each); elsewhere,
+/// Fifo.
+fn present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
+    if modes.contains(&wgpu::PresentMode::Mailbox) {
+        wgpu::PresentMode::Mailbox
+    } else if cfg!(windows) && modes.contains(&wgpu::PresentMode::Immediate) {
+        wgpu::PresentMode::Immediate
+    } else {
+        wgpu::PresentMode::Fifo
+    }
+}
+
 pub fn adapter_info_to_gpu_info(info: wgpu::AdapterInfo) -> GpuInfo {
     GpuInfo {
         name: info.name,
@@ -368,7 +387,7 @@ impl WebGpuState {
             format,
             width: dimensions.pixel_width as u32,
             height: dimensions.pixel_height as u32,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode: present_mode(&caps.present_modes),
             alpha_mode: if caps
                 .alpha_modes
                 .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
