@@ -3139,15 +3139,21 @@ impl WindowView {
             if inner.paint_throttled {
                 inner.invalidated = true;
             } else {
+                // the next frame is due an interval after this one began,
+                // not after it ended (a frame then takes the interval, not
+                // the interval and the paint)
+                let began = std::time::Instant::now();
                 inner.events.dispatch(WindowEvent::NeedRepaint);
                 inner.invalidated = false;
                 inner.paint_throttled = true;
 
                 let window_id = inner.window_id;
-                let max_fps = inner.config.max_fps;
+                let max_fps = inner.config.max_fps.max(1);
                 promise::spawn::spawn(async move {
-                    async_io::Timer::after(std::time::Duration::from_millis(1000 / max_fps as u64))
-                        .await;
+                    async_io::Timer::at(
+                        began + std::time::Duration::from_micros(1_000_000 / max_fps),
+                    )
+                    .await;
                     Connection::with_window_inner(window_id, move |inner| {
                         if let Some(window_view) = WindowView::get_this(unsafe { &**inner.view }) {
                             let mut state = window_view.inner.borrow_mut();

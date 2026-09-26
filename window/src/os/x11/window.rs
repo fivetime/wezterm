@@ -715,14 +715,20 @@ impl XWindowInner {
                     }
                 }
 
+                // the next frame is due an interval after this one began,
+                // not after it ended (a frame then takes the interval, not
+                // the interval and the paint)
+                let began = std::time::Instant::now();
                 self.events.dispatch(WindowEvent::NeedRepaint);
 
                 self.paint_throttled = true;
                 let window_id = self.window_id;
-                let max_fps = self.config.max_fps;
+                let max_fps = self.config.max_fps.max(1);
                 promise::spawn::spawn(async move {
-                    async_io::Timer::after(std::time::Duration::from_millis(1000 / max_fps as u64))
-                        .await;
+                    async_io::Timer::at(
+                        began + std::time::Duration::from_micros(1_000_000 / max_fps),
+                    )
+                    .await;
                     XConnection::with_window_inner(window_id, move |inner| {
                         inner.paint_throttled = false;
                         if inner.invalidated {

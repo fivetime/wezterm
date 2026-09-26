@@ -1652,7 +1652,7 @@ unsafe fn wm_paint(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> 
     let max_fps = inner.config.max_fps.max(1);
     pace_frame(
         window_id,
-        began + std::time::Duration::from_micros(1_000_000 / u64::from(max_fps)),
+        began + std::time::Duration::from_micros(1_000_000 / max_fps),
     );
 
     Some(0)
