@@ -1162,10 +1162,28 @@ impl LocalPane {
                                 .name("procinfo".into())
                                 .spawn(move || {
                                     let mut changed = false;
-                                    if let Some(root) = LocalProcessInfo::with_root_pid(pid) {
+                                    // A process just started may not be in
+                                    // the system's process snapshot yet (it
+                                    // is shared for 250 ms, see procinfo):
+                                    // asked again a little later, or the
+                                    // pane's title would wait for someone
+                                    // else to ask
+                                    let mut found = None;
+                                    for attempt in 0..4 {
+                                        if attempt > 0 {
+                                            std::thread::sleep(std::time::Duration::from_millis(
+                                                300,
+                                            ));
+                                        }
+                                        found = LocalProcessInfo::with_root_pid(pid);
+                                        if found.is_some() {
+                                            break;
+                                        }
+                                    }
+                                    if let Some(root) = found {
                                         let fresh = CachedProcInfo::from_root(root);
                                         let mut cache = cache.lock();
-                                        changed = cache.as_ref().map_or(true, |old| {
+                                        changed = cache.as_ref().is_none_or(|old| {
                                             old.foreground.name != fresh.foreground.name
                                                 || old.foreground.cwd != fresh.foreground.cwd
                                         });
