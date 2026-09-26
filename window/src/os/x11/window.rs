@@ -456,27 +456,34 @@ impl XWindowInner {
                 source_bitmap: xcb::x::Pixmap::none(),
             });
         } else {
+            // the arc cut, row by row: only what lies outside it. A
+            // square of r cut away whatever the content draws by the
+            // corner inside the arc too (a caption button's hover disc
+            // lost its corner); Chrome clips to the rounded shape
+            let mut rectangles: Vec<xcb::x::Rectangle> = crate::os::edge::corner_row_insets(r)
+                .into_iter()
+                .enumerate()
+                .map(|(y, inset)| xcb::x::Rectangle {
+                    x: inset as i16,
+                    y: y as i16,
+                    width: inner.0.saturating_sub(2 * inset),
+                    height: 1,
+                })
+                .collect();
+            rectangles.push(xcb::x::Rectangle {
+                x: 0,
+                y: r as i16,
+                width: inner.0,
+                height: inner.1 - r,
+            });
             conn.send_request_unchecked(&xcb::shape::Rectangles {
                 operation: xcb::shape::So::Set,
                 destination_kind: xcb::shape::Sk::Bounding,
-                ordering: xcb::x::ClipOrdering::Unsorted,
+                ordering: xcb::x::ClipOrdering::YSorted,
                 destination_window: self.child_id,
                 x_offset: 0,
                 y_offset: 0,
-                rectangles: &[
-                    xcb::x::Rectangle {
-                        x: r as i16,
-                        y: 0,
-                        width: inner.0 - 2 * r,
-                        height: r,
-                    },
-                    xcb::x::Rectangle {
-                        x: 0,
-                        y: r as i16,
-                        width: inner.0,
-                        height: inner.1 - r,
-                    },
-                ],
+                rectangles: &rectangles,
             });
         }
         let _ = conn.flush();

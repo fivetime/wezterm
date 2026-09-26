@@ -512,6 +512,20 @@ impl Geometry {
     }
 }
 
+/// How far in from each side a round top corner of `radius` pixels starts
+/// on each of its rows, top first: the pixels whose centres lie outside
+/// the corner's circle are left out.
+pub fn corner_row_insets(radius: u16) -> Vec<u16> {
+    let r = f32::from(radius);
+    (0..radius)
+        .map(|y| {
+            let dy = r - f32::from(y) - 0.5;
+            let half = (r * r - dy * dy).max(0.).sqrt();
+            (r - half - 0.5).ceil().max(0.) as u16
+        })
+        .collect()
+}
+
 /// Which way a press at window pixel (x, y) resizes: in the resize band
 /// just outside the content, corners reaching `corner` along the edges;
 /// `None` on the content or past the band.
@@ -651,6 +665,28 @@ mod tests {
                 assert!(got == expected, "rect {rect:?} of {outer:?} r {radius}");
             }
         }
+    }
+
+    /// The rows of a round corner: inset most at the top, down to none by
+    /// the corner's last row, each pixel kept whose centre lies inside the
+    /// circle (the rest are what the frame beneath shows).
+    #[test]
+    fn a_corner_is_cut_along_its_arc() {
+        let rows = corner_row_insets(14);
+        assert_eq!(rows.len(), 14);
+        assert!(rows.windows(2).all(|w| w[0] >= w[1]), "{rows:?}");
+        assert_eq!(*rows.last().unwrap(), 0);
+        assert!(rows[0] >= 8 && rows[0] < 14, "{rows:?}");
+        let r = 14f32;
+        for (y, &inset) in rows.iter().enumerate() {
+            let dy = r - y as f32 - 0.5;
+            let inside = |x: u16| (f32::from(x) + 0.5 - r).powi(2) + dy * dy <= r * r;
+            assert!(inside(inset), "row {y}: first kept pixel inside");
+            if inset > 0 {
+                assert!(!inside(inset - 1), "row {y}: the one before outside");
+            }
+        }
+        assert!(corner_row_insets(0).is_empty());
     }
 
     #[test]
