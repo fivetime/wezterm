@@ -1609,6 +1609,10 @@ unsafe fn wm_kill_focus(
 }
 
 unsafe fn wm_paint(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
+    // (the next frame is due an interval after this one began, not after
+    // it ended: a frame then takes the interval, not the interval and the
+    // paint)
+    let began = std::time::Instant::now();
     let inner = rc_from_hwnd(hwnd)?;
     let mut inner = inner.borrow_mut();
 
@@ -1638,23 +1642,121 @@ unsafe fn wm_paint(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> 
     // Ask the app to repaint in a bit
     inner.events.dispatch(WindowEvent::NeedRepaint);
 
+    // during a live resize every size step is painted: a step left
+    // unpainted shows the last frame stretched to the new size
+    if inner.in_size_move {
+        return Some(0);
+    }
     inner.paint_throttled = true;
     let window_id = inner.hwnd;
-    let max_fps = inner.config.max_fps;
-    promise::spawn::spawn(async move {
-        async_io::Timer::after(std::time::Duration::from_millis(1000 / max_fps as u64)).await;
-        Connection::with_window_inner(window_id, move |inner| {
-            inner.paint_throttled = false;
-            if inner.invalidated {
-                InvalidateRect(inner.hwnd.0, null(), 0);
-            }
-            Ok(())
-        });
-    })
-    .detach();
+    let max_fps = inner.config.max_fps.max(1);
+    pace_frame(
+        window_id,
+        began + std::time::Duration::from_micros(1_000_000 / u64::from(max_fps)),
+    );
 
     Some(0)
 }
+
+/// Lets `window_id` paint again at `due` (a frame interval, `max_fps`',
+/// after the last paint began). The wait is a high-resolution waitable timer on a thread of
+/// its own: the executor's timers wait in whole ticks of Windows' clock,
+/// 15.6 ms, so a 16 ms wait took 31 and the window painted 32 frames a
+/// second where it asked for 60. A high-resolution timer waits to within
+/// a fraction of a millisecond without raising the system's timer
+/// resolution (timeBeginPeriod, which costs battery for every process).
+fn pace_frame(window_id: HWindow, due: std::time::Instant) {
+    use std::sync::mpsc::{channel, Sender};
+    use std::sync::OnceLock;
+    use std::time::Instant;
+    static PACER: OnceLock<Mutex<Sender<(HWindow, Instant)>>> = OnceLock::new();
+    let pacer = PACER.get_or_init(|| {
+        let (tx, rx) = channel::<(HWindow, Instant)>();
+        let spawned = std::thread::Builder::new()
+            .name("frame pacer".into())
+            .spawn(move || {
+                let timer = HighResolutionTimer::new();
+                while let Ok((window_id, due)) = rx.recv() {
+                    let now = Instant::now();
+                    if due > now {
+                        match &timer {
+                            Some(timer) => timer.wait(due - now),
+                            None => std::thread::sleep(due - now),
+                        }
+                    }
+                    Connection::with_window_inner(window_id, move |inner| {
+                        inner.paint_throttled = false;
+                        if inner.invalidated {
+                            unsafe {
+                                InvalidateRect(inner.hwnd.0, null(), 0);
+                            }
+                        }
+                        Ok(())
+                    });
+                }
+            });
+        if let Err(err) = spawned {
+            log::error!("frame pacer: {err:#}");
+        }
+        Mutex::new(tx)
+    });
+    let sent = pacer.lock().unwrap().send((window_id, due));
+    if sent.is_err() {
+        // no pacer: paint again as soon as asked
+        Connection::with_window_inner(window_id, |inner| {
+            inner.paint_throttled = false;
+            Ok(())
+        });
+    }
+}
+
+/// A waitable timer with sub-millisecond precision (Windows 10 1803 on);
+/// `None` where the system has none.
+struct HighResolutionTimer(winapi::um::winnt::HANDLE);
+
+impl HighResolutionTimer {
+    fn new() -> Option<Self> {
+        const CREATE_WAITABLE_TIMER_HIGH_RESOLUTION: u32 = 0x0000_0002;
+        const TIMER_ALL_ACCESS: u32 = 0x001F_0003;
+        let handle = unsafe {
+            winapi::um::synchapi::CreateWaitableTimerExW(
+                null_mut(),
+                null(),
+                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_ALL_ACCESS,
+            )
+        };
+        (!handle.is_null()).then_some(Self(handle))
+    }
+
+    fn wait(&self, duration: std::time::Duration) {
+        // relative due time: negative, in 100 ns units
+        let mut due: winapi::um::winnt::LARGE_INTEGER = unsafe { std::mem::zeroed() };
+        unsafe {
+            *due.QuadPart_mut() = -((duration.as_nanos() / 100).max(1) as i64);
+        }
+        let set =
+            unsafe { winapi::um::synchapi::SetWaitableTimer(self.0, &due, 0, None, null_mut(), 0) };
+        if set == 0 {
+            std::thread::sleep(duration);
+            return;
+        }
+        unsafe {
+            winapi::um::synchapi::WaitForSingleObject(self.0, winapi::um::winbase::INFINITE);
+        }
+    }
+}
+
+impl Drop for HighResolutionTimer {
+    fn drop(&mut self) {
+        unsafe {
+            winapi::um::handleapi::CloseHandle(self.0);
+        }
+    }
+}
+
+// (the timer is only ever used on the pacer's thread)
+unsafe impl Send for HighResolutionTimer {}
 
 fn mods_and_buttons(wparam: WPARAM) -> (Modifiers, MouseButtons) {
     let mut modifiers = Modifiers::default();
