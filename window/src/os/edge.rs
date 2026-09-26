@@ -243,28 +243,45 @@ impl Edge {
         (f, u)
     }
 
-    /// The whole picture of an `outer`-sized window's edge, as one buffer
-    /// of premultiplied BGRA (wl_shm ARGB8888), the content's own place in
-    /// it clear but for the round top corners: what a subsurface beneath
-    /// the content shows; into `out` (at least `outer`'s width x height
-    /// x 4 bytes, rows packed), with no allocation of its own. (Wayland's)
-    #[cfg_attr(not(feature = "wayland"), allow(dead_code))]
-    pub fn paint_all_into(
+    /// The strips an `outer`-sized window's edge is painted in: the
+    /// margins, the top one reaching under the content's top edge by the
+    /// corners' radius (where they are cut round), none of them empty.
+    /// With `insets`, the content's size and the radius all whole
+    /// multiples of a Wayland buffer scale, so are the strips.
+    pub fn strips(
+        &mut self,
+        outer: (u16, u16),
+        insets: Insets,
+        scale: f64,
+    ) -> Vec<(Strip, (u16, u16, u16, u16))> {
+        let radius = self.radius(scale);
+        let inner = (
+            outer.0.saturating_sub(insets.left + insets.right),
+            outer.1.saturating_sub(insets.top + insets.bottom),
+        );
+        strips(outer, insets, inner, radius)
+    }
+
+    /// What paints the strips (`strips`) of an `outer`-sized window's
+    /// edge, focused or not (`StripPainter::paint`).
+    pub fn strip_painter(
         &mut self,
         focused: bool,
         outer: (u16, u16),
         insets: Insets,
         scale: f64,
         header: [f32; 4],
-        out: &mut [u8],
-    ) {
+    ) -> StripPainter<'_> {
         let radius = self.radius(scale);
         let header_under = !self.is_solid();
         let (pf, pu) = self.pictures(scale, header);
         let picture = if focused { pf } else { pu };
         let geometry = Geometry::new(outer, insets, picture.width(), radius, header_under);
-        let rect = (0, 0, outer.0, outer.1);
-        geometry.fill(picture, header, rect, true, out);
+        StripPainter {
+            picture,
+            geometry,
+            header,
+        }
     }
 
     /// The pixels of the margins (and the rounded top corners) of an
@@ -279,43 +296,81 @@ impl Edge {
         scale: f64,
         header: [f32; 4],
     ) -> Vec<(u16, u16, u16, u16, Vec<u8>)> {
-        let radius = self.radius(scale);
-        let header_under = !self.is_solid();
-        let (pf, pu) = self.pictures(scale, header);
-        let picture = if focused { pf } else { pu };
-        let geometry = Geometry::new(outer, insets, picture.width(), radius, header_under);
-        let (w, h) = outer;
-        let (inner_w, inner_h) = geometry.inner();
-        if inner_w == 0 || inner_h == 0 {
-            return vec![];
-        }
-        // the margins, and the band under the content's top edge where
-        // the corners are cut
-        let top_rows = (insets.top + radius.min(inner_h)).min(h);
-        let mut rects = vec![(0, 0, w, top_rows)];
-        let bottom = insets.top + inner_h;
-        if bottom < h {
-            rects.push((0, bottom, w, h - bottom));
-        }
-        if top_rows < bottom {
-            rects.push((0, top_rows, insets.left, bottom - top_rows));
-            rects.push((
-                insets.left + inner_w,
-                top_rows,
-                w - insets.left - inner_w,
-                bottom - top_rows,
-            ));
-        }
-        rects
+        let strips = self.strips(outer, insets, scale);
+        let painter = self.strip_painter(focused, outer, insets, scale, header);
+        strips
             .into_iter()
-            .filter(|r| r.2 > 0 && r.3 > 0)
-            .map(|(x, y, rw, rh)| {
+            .map(|(_, (x, y, rw, rh))| {
                 let mut data = vec![0; rw as usize * rh as usize * 4];
-                geometry.fill(picture, header, (x, y, rw, rh), false, &mut data);
+                painter.paint((x, y, rw, rh), &mut data);
                 (x, y, rw, rh, data)
             })
             .collect()
     }
+}
+
+/// Paints strips of one window's edge (`Edge::strip_painter`).
+pub struct StripPainter<'a> {
+    picture: &'a RgbaImage,
+    geometry: Geometry,
+    header: [f32; 4],
+}
+
+impl StripPainter<'_> {
+    /// The pixels of `rect` (one of `Edge::strips`), premultiplied BGRA
+    /// (wl_shm ARGB8888, a 32-bit X visual's order on a little-endian
+    /// host), into `out` (at least the rect's width x height x 4 bytes,
+    /// rows packed), with no allocation of its own.
+    pub fn paint(&self, rect: (u16, u16, u16, u16), out: &mut [u8]) {
+        self.geometry
+            .fill(self.picture, self.header, rect, false, out);
+    }
+}
+
+/// Which of the edge's strips a rectangle is (`Edge::strips`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Strip {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+/// The edge's strips of an `outer`-sized window with `insets` around an
+/// `inner`-sized content whose top corners are cut round by `radius`.
+fn strips(
+    outer: (u16, u16),
+    insets: Insets,
+    inner: (u16, u16),
+    radius: u16,
+) -> Vec<(Strip, (u16, u16, u16, u16))> {
+    let (w, h) = outer;
+    let (inner_w, inner_h) = inner;
+    if inner_w == 0 || inner_h == 0 {
+        return vec![];
+    }
+    // the margins, and the band under the content's top edge where the
+    // corners are cut
+    let top_rows = (insets.top + radius.min(inner_h)).min(h);
+    let mut rects = vec![(Strip::Top, (0, 0, w, top_rows))];
+    let bottom = insets.top + inner_h;
+    if bottom < h {
+        rects.push((Strip::Bottom, (0, bottom, w, h - bottom)));
+    }
+    if top_rows < bottom {
+        rects.push((Strip::Left, (0, top_rows, insets.left, bottom - top_rows)));
+        rects.push((
+            Strip::Right,
+            (
+                insets.left + inner_w,
+                top_rows,
+                w - insets.left - inner_w,
+                bottom - top_rows,
+            ),
+        ));
+    }
+    rects.retain(|(_, r)| r.2 > 0 && r.3 > 0);
+    rects
 }
 
 /// Where things are in one window at one scale.

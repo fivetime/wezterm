@@ -302,25 +302,16 @@ impl WaylandWindow {
                     None
                 }
             })
-            .map(|edge| {
-                let wayland_state = conn.wayland_state.borrow();
-                let (subsurface, edge_surface) = wayland_state
-                    .subcompositor
-                    .create_subsurface(surface.clone(), &qh);
-                subsurface.place_below(&surface);
-                WaylandEdge {
-                    edge,
-                    surface: edge_surface,
-                    subsurface,
-                    buffer: None,
-                    painted: None,
-                    insets: Default::default(),
-                    band: 0,
-                    scale: 1,
-                    outer: (0, 0),
-                    restored: true,
-                    focused: true,
-                }
+            .map(|edge| WaylandEdge {
+                edge,
+                strips: vec![],
+                painted: None,
+                insets: Default::default(),
+                band: 0,
+                scale: 1,
+                outer: (0, 0),
+                restored: true,
+                focused: true,
             });
 
         window.set_min_size(Some((32, 32)));
@@ -631,17 +622,23 @@ pub(crate) fn read_pipe_with_timeout(mut file: ReadPipe) -> anyhow::Result<Strin
     Ok(String::from_utf8(result)?)
 }
 
-/// The window's own edge on Wayland (see `crate::os::edge`): a subsurface
-/// beneath the content reaching out by the margins, painted with the
-/// theme's border and shadow and the round top corners' header colour
-/// (the renderer clears the content's corners over them); its input
-/// region the resize band. The window geometry stays the content's, so
-/// the compositor places the window by it, shadow aside.
+/// The window's own edge on Wayland (see `crate::os::edge`): subsurfaces
+/// beneath the content, one per strip of the margins (`Edge::strips`),
+/// painted with the theme's border and shadow and, under the content's
+/// top edge, the round top corners' header colour (the renderer clears
+/// the content's corners over them); their input region the resize band.
+/// The window geometry stays the content's, so the compositor places the
+/// window by it, shadow aside.
+///
+/// One window-sized buffer, as before, had the compositor take the whole
+/// window's pixels at every resize step, the content's clear middle too:
+/// gnome-shell used a third more CPU resizing a window with its edge than
+/// one without. The strips hold the margins alone, and a strip that shows
+/// the same as before (the side ones as the window only widens) is moved
+/// rather than painted again.
 pub(super) struct WaylandEdge {
     edge: crate::os::edge::Edge,
-    pub(super) surface: WlSurface,
-    subsurface: wayland_client::protocol::wl_subsurface::WlSubsurface,
-    buffer: Option<smithay_client_toolkit::shm::slot::Buffer>,
+    pub(super) strips: Vec<EdgeStrip>,
     /// What it shows: the content's size in pixels, focus, scale.
     painted: Option<((i32, i32), bool, i32)>,
     /// The margins and the resize band in pixels at `scale`.
@@ -653,6 +650,27 @@ pub(super) struct WaylandEdge {
     restored: bool,
     focused: bool,
 }
+
+/// One of the edge's strips: its surface, and where it is in the edge
+/// (pixels, from the outer edge's top left).
+pub(super) struct EdgeStrip {
+    pub(super) surface: WlSurface,
+    subsurface: wayland_client::protocol::wl_subsurface::WlSubsurface,
+    buffer: Option<smithay_client_toolkit::shm::slot::Buffer>,
+    pub(super) rect: (u16, u16, u16, u16),
+    /// What its buffer shows: the strip, its size, and what its pixels
+    /// depend on (focus, scale, insets, the content's size along it)
+    shown: Option<StripKey>,
+}
+
+type StripKey = (
+    crate::os::edge::Strip,
+    (u16, u16),
+    bool,
+    i32,
+    crate::os::edge::Insets,
+    (u16, u16),
+);
 
 pub struct WaylandWindowInner {
     pub(crate) events: WindowEventSender,
@@ -714,8 +732,11 @@ impl WaylandWindowInner {
         };
         if !e.restored {
             if e.painted.take().is_some() {
-                e.surface.attach(None, 0, 0);
-                e.surface.commit();
+                for strip in &mut e.strips {
+                    strip.surface.attach(None, 0, 0);
+                    strip.surface.commit();
+                    strip.shown = None;
+                }
             }
             return;
         }
@@ -729,53 +750,93 @@ impl WaylandWindowInner {
             (content.0 + i32::from(insets.left + insets.right)) as u16,
             (content.1 + i32::from(insets.top + insets.bottom)) as u16,
         );
+        let inner = (content.0 as u16, content.1 as u16);
+        let strips = e.edge.strips(outer, insets, f64::from(scale));
         let conn = WaylandConnection::get().unwrap().wayland();
         let qh = conn.event_queue.borrow().handle();
         let wayland_state = conn.wayland_state.borrow();
+        let parent = self.window.as_ref().unwrap().wl_surface().clone();
+        while e.strips.len() < strips.len() {
+            let (subsurface, surface) = wayland_state
+                .subcompositor
+                .create_subsurface(parent.clone(), &qh);
+            subsurface.place_below(&parent);
+            e.strips.push(EdgeStrip {
+                surface,
+                subsurface,
+                buffer: None,
+                rect: (0, 0, 0, 0),
+                shown: None,
+            });
+        }
         let mut pool = wayland_state.mem_pool.borrow_mut();
-        let (w, h) = (i32::from(outer.0), i32::from(outer.1));
-        let Ok((buffer, canvas)) = pool.create_buffer(
-            w,
-            h,
-            w * 4,
-            wayland_client::protocol::wl_shm::Format::Argb8888,
-        ) else {
-            log::warn!("window edge: no buffer for {w}x{h}");
-            return;
-        };
-        // the slot may be larger than asked for
-        let len = (w * h * 4) as usize;
-        e.edge.paint_all_into(
-            e.focused,
+        let s = |px: u16| i32::from(px) / scale;
+        let (cw, ch) = (content.0 / scale, content.1 / scale);
+        let b = s(band);
+        let focused = e.focused;
+        let painter = e.edge.strip_painter(
+            focused,
             outer,
             insets,
             f64::from(scale),
             [header.0, header.1, header.2, header.3],
-            &mut canvas[..len],
         );
-        let s = |px: u16| i32::from(px) / scale;
-        e.surface.attach(Some(buffer.wl_buffer()), 0, 0);
-        e.surface.set_buffer_scale(scale);
-        e.surface.damage_buffer(0, 0, w, h);
-        e.subsurface.set_position(-s(insets.left), -s(insets.top));
-        // the resize band around the content; the shadow lets clicks through
-        let region = wayland_state
-            .compositor
-            .wl_compositor()
-            .create_region(&qh, GlobalData);
-        let (cw, ch) = (content.0 / scale, content.1 / scale);
-        let b = s(band);
-        region.add(
-            s(insets.left) - b,
-            s(insets.top) - b,
-            cw + 2 * b,
-            ch + 2 * b,
-        );
-        region.subtract(s(insets.left), s(insets.top), cw, ch);
-        e.surface.set_input_region(Some(&region));
-        region.destroy();
-        e.surface.commit();
-        e.buffer = Some(buffer);
+        for (i, strip) in e.strips.iter_mut().enumerate() {
+            let Some(&(which, rect)) = strips.get(i) else {
+                // fewer strips than before (a window shorter than its
+                // corners): the spare ones show nothing
+                if strip.shown.take().is_some() {
+                    strip.surface.attach(None, 0, 0);
+                    strip.surface.commit();
+                }
+                continue;
+            };
+            let (x, y, w, h) = rect;
+            // what the strip's pixels depend on besides its size: the
+            // content's length along it (the top and bottom ones, its
+            // width; the sides, its height), focus, scale, the margins
+            let along = match which {
+                crate::os::edge::Strip::Top | crate::os::edge::Strip::Bottom => inner,
+                crate::os::edge::Strip::Left | crate::os::edge::Strip::Right => (0, inner.1),
+            };
+            let shown = (which, (w, h), focused, scale, insets, along);
+            if strip.shown != Some(shown) {
+                let (bw, bh) = (i32::from(w), i32::from(h));
+                let Ok((buffer, canvas)) = pool.create_buffer(
+                    bw,
+                    bh,
+                    bw * 4,
+                    wayland_client::protocol::wl_shm::Format::Argb8888,
+                ) else {
+                    log::warn!("window edge: no buffer for {w}x{h}");
+                    continue;
+                };
+                // the slot may be larger than asked for
+                let len = (bw * bh * 4) as usize;
+                painter.paint(rect, &mut canvas[..len]);
+                strip.surface.attach(Some(buffer.wl_buffer()), 0, 0);
+                strip.surface.set_buffer_scale(scale);
+                strip.surface.damage_buffer(0, 0, bw, bh);
+                strip.buffer = Some(buffer);
+                strip.shown = Some(shown);
+            }
+            // (a subsurface's position takes effect with the content's
+            // next commit)
+            let (sx, sy) = (s(x) - s(insets.left), s(y) - s(insets.top));
+            strip.subsurface.set_position(sx, sy);
+            // the resize band around the content, in the strip's own
+            // coordinates; the shadow lets clicks through
+            let region = wayland_state
+                .compositor
+                .wl_compositor()
+                .create_region(&qh, GlobalData);
+            region.add(-b - sx, -b - sy, cw + 2 * b, ch + 2 * b);
+            region.subtract(-sx, -sy, cw, ch);
+            strip.surface.set_input_region(Some(&region));
+            region.destroy();
+            strip.surface.commit();
+            strip.rect = rect;
+        }
         e.painted = Some(key);
         e.insets = insets;
         e.band = band;

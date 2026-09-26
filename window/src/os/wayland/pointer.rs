@@ -204,22 +204,23 @@ impl WaylandState {
 
         for evt in events {
             let surface = &evt.surface;
-            // a window's own edge: its resize band
-            let edge_owner = windows
-                .iter()
-                .find(|(_, w)| {
-                    w.borrow()
-                        .edge
-                        .as_ref()
-                        .is_some_and(|e| e.surface.id() == surface.id())
+            // a window's own edge: its resize band, on one of its strips
+            let edge_owner = windows.iter().find_map(|(id, w)| {
+                w.borrow().edge.as_ref().and_then(|e| {
+                    e.strips
+                        .iter()
+                        .find(|s| s.surface.id() == surface.id())
+                        .map(|s| (*id, s.rect))
                 })
-                .map(|(id, _)| *id);
-            if let Some(wid) = edge_owner {
+            });
+            if let Some((wid, rect)) = edge_owner {
                 let mut inner = windows.get(&wid).unwrap().borrow_mut();
                 let side = inner.edge.as_ref().and_then(|e| {
                     let (x, y) = evt.position;
                     let px = |v: f64| (v * f64::from(e.scale)) as i32;
-                    crate::os::edge::side_at(px(x), px(y), e.outer, e.insets, e.band)
+                    // the strip's surface coordinates to the edge's
+                    let (x, y) = (px(x) + i32::from(rect.0), px(y) + i32::from(rect.1));
+                    crate::os::edge::side_at(x, y, e.outer, e.insets, e.band)
                 });
                 match evt.kind {
                     PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
