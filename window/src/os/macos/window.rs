@@ -393,6 +393,45 @@ pub(crate) struct WindowInner {
     config: ConfigHandle,
 }
 
+impl WindowInner {
+    /// Hands the drag of the window to the window server, as Chrome does
+    /// for its caption (`cr_mouseDownOnFrameView`: the frame view's
+    /// mouse-down becomes `performWindowDragWithEvent:`): the window then
+    /// moves with the system's own dragging (snapping to the screen's
+    /// edges and Spaces included) rather than following each mouseDragged
+    /// here. The drag begins with the left button's last press, so the
+    /// window keeps the offset from the pointer it was grabbed at.
+    ///
+    /// The window server keeps the mouse's remaining events, its release
+    /// too, so the GUI's own drag is ended here with a release.
+    fn request_drag_move(&mut self) {
+        let Some(view) = WindowView::get_this(unsafe { &**self.view }) else {
+            return;
+        };
+        // (no borrow held across the call: AppKit may deliver events in it)
+        let (press, last) = {
+            let mut inner = view.inner.borrow_mut();
+            (inner.drag_press.take(), inner.last_mouse.clone())
+        };
+        let Some(press) = press else {
+            return;
+        };
+        unsafe {
+            let () = msg_send![*self.window, performWindowDragWithEvent: *press];
+        }
+        if let Some(last) = last {
+            view.inner
+                .borrow_mut()
+                .events
+                .dispatch(WindowEvent::MouseEvent(MouseEvent {
+                    kind: MouseEventKind::Release(MousePress::Left),
+                    mouse_buttons: MouseButtons::NONE,
+                    ..last
+                }));
+        }
+    }
+}
+
 fn function_key_to_keycode(function_key: char) -> KeyCode {
     // FIXME: CTRL-C is 0x3, should it be normalized to C here
     // using the unmod string?  Or should be normalize the 0x3
@@ -519,6 +558,8 @@ impl Window {
                 ime_last_event: None,
                 live_resizing: false,
                 ime_text: String::new(),
+                drag_press: None,
+                last_mouse: None,
             }));
 
             let window: id = msg_send![get_window_class(), alloc];
@@ -826,6 +867,13 @@ impl WindowOps for Window {
     fn set_window_position(&self, coords: ScreenPoint) {
         Connection::with_window_inner(self.id, move |inner| {
             inner.set_window_position(coords);
+            Ok(())
+        });
+    }
+
+    fn request_drag_move(&self) {
+        Connection::with_window_inner(self.id, move |inner| {
+            inner.request_drag_move();
             Ok(())
         });
     }
@@ -1643,6 +1691,13 @@ struct Inner {
     live_resizing: bool,
 
     ime_text: String,
+
+    /// The left button's last press, kept for `request_drag_move`:
+    /// `performWindowDragWithEvent:` takes the mouse-down event
+    drag_press: Option<StrongPtr>,
+    /// The last mouse event dispatched: the release that ends the GUI's
+    /// drag once the window server has taken it over is made from it
+    last_mouse: Option<MouseEvent>,
 }
 
 #[repr(C)]
@@ -2408,6 +2463,7 @@ impl WindowView {
             modifiers = key_modifiers(nsevent.modifierFlags());
             screen_coords = NSEvent::mouseLocation(nsevent);
         }
+        let left_press = kind == MouseEventKind::Press(MousePress::Left);
         let event = MouseEvent {
             kind,
             coords: Point::new(coords.x as isize, coords.y as isize),
@@ -2418,6 +2474,10 @@ impl WindowView {
 
         if let Some(myself) = Self::get_this(this) {
             let mut inner = myself.inner.borrow_mut();
+            if left_press {
+                inner.drag_press = Some(unsafe { StrongPtr::retain(nsevent) });
+            }
+            inner.last_mouse = Some(event.clone());
             inner.events.dispatch(WindowEvent::MouseEvent(event));
         }
     }

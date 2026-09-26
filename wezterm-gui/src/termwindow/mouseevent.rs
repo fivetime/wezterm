@@ -279,9 +279,10 @@ impl super::TermWindow {
                     // start no move, so the second one reaches this
                     // window rather than the window manager's grab.
                     // Where the platform then moves the window itself
-                    // (X11's _NET_WM_MOVERESIZE, Wayland's xdg move) no
-                    // more motion arrives here; elsewhere (macOS) the
-                    // window follows the pointer from here.
+                    // (X11's _NET_WM_MOVERESIZE, Wayland's xdg move,
+                    // macOS's performWindowDragWithEvent:) no more motion
+                    // arrives here; a platform without one has the
+                    // window follow the pointer from here.
                     if !self.window_drag_started {
                         let threshold =
                             (WINDOW_DRAG_THRESHOLD * self.dimensions.dpi as f32 / 96.) as isize;
