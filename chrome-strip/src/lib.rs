@@ -620,10 +620,14 @@ impl Layout {
             t.visible = right <= strip_right
                 && (inputs.active <= i || right + active_w - t.bounds_dip.w <= strip_right);
         }
-        // the new-tab button after the strip: its bounds end where the
-        // tabs do, or at its allotted width when they run past it
+        // the new-tab button right after the last tab shown. Chrome puts
+        // it after the strip, which ends at its allotted width when the
+        // tabs run past it, so the tabs hidden there leave a gap before
+        // the button of up to a tab's width; here it follows the tabs
+        // (asked for, 2026-09-26)
         let tabs_right = tabs
-            .last()
+            .iter()
+            .rfind(|t| t.visible)
             .map_or(region_left, |t| t.bounds_dip.right())
             .min(strip_right);
         let new_tab_x = tabs_right - FOOT + NEW_TAB_AFTER_TABS;
@@ -1165,8 +1169,11 @@ mod tests {
             l.tabs[0].bounds_dip.w, 32.,
             "never narrower than the minimum"
         );
-        // the new-tab button sits 6 past the strip's own edge, not the tabs'
-        assert_eq!(l.new_tab.x, strip_right - 12. + 6.);
+        // the new-tab button 6 past the last tab shown (not the strip's
+        // edge, as Chrome's: no gap where the hidden tabs would be)
+        let last_shown = shown.last().unwrap().bounds_dip.right();
+        assert_eq!(l.new_tab.x, last_shown - 12. + 6.);
+        assert!(l.new_tab.x < strip_right - 12. + 6. + 0.5);
         // a tab before the active one that would be clipped when activated
         // (24 wider) is hidden, though it fits as it is
         let last_fit = l
@@ -1264,17 +1271,20 @@ mod tests {
             })
         };
         let (lead, trail) = (full(false), full(true));
-        // trailing, the button ends where the new-tab button does when
-        // leading: at the grab handle, less the foot the button overlaps
-        assert_eq!(lead.new_tab.right(), 600. - 42. - FOOT);
-        assert_eq!(
-            trail.tab_search.map(|r| r.right()),
-            Some(lead.new_tab.right())
-        );
+        // both follow the last tab shown and keep the grab handle: the
+        // new-tab button (leading), the tab search button (trailing) ends
+        // short of it, less the foot the button overlaps
+        let last_right = |l: &Layout| {
+            l.tabs
+                .iter()
+                .rfind(|t| t.visible)
+                .map_or(0., |t| t.bounds_dip.right())
+        };
+        assert_eq!(lead.new_tab.x, last_right(&lead) - FOOT + 6.);
+        assert!(lead.new_tab.right() <= 600. - 42. - FOOT);
+        assert_eq!(trail.new_tab.x, last_right(&trail) - FOOT + 6.);
+        assert!(trail.tab_search.map_or(0., |r| r.right()) <= 600. - 42. - FOOT);
         assert!(!lead.tab_search_trailing);
-        // the new-tab button 34 further in for it, the tabs' room 6 less
-        // (the leading button takes 28 of it, the trailing one 28 + 6)
-        assert_eq!(trail.new_tab.x, lead.new_tab.x - 34.);
         let shown = |l: &Layout| l.tabs.iter().filter(|t| t.visible).count();
         assert!(shown(&trail) <= shown(&lead) && shown(&trail) + 1 >= shown(&lead));
     }

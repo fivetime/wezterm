@@ -74,7 +74,8 @@ strip's own edge). Checked against Chrome itself on 2026-09-26
 (EndeavourOS, a throwaway profile, 100 blank tabs, then three more opened
 at the end, each active): the active tab past the edge is hidden, and the
 new-tab button stays at the strip's edge with a gap before it of up to a
-tab's width, as here.
+tab's width. Here the new-tab button follows the last tab shown instead
+(see the known differences).
 
 Contents: `favicon.size` 16 at the contents' corner (rows 12..28);
 `tab.pre_title_padding` 8; `title.bounds` (8 before the close icon);
@@ -203,6 +204,11 @@ whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
   that tile, and draws no shadow under Xfwm4 (`CanSetDecorationInsets`
   false there); the fork draws its own edge on any X11 window manager
   and trusts `_GTK_FRAME_EXTENTS` wherever it is advertised.
+- With more tabs than fit, the new-tab button follows the last tab shown,
+  where Chrome's stays at the strip's edge after a gap of up to a tab's
+  width (the hidden tabs' room; most visible after tabs opened maximized
+  and the window restored, the active tab at the end then hidden). Asked
+  for 2026-09-26; `Layout::compute`'s `tabs_right`, under test.
 - A double-click on the strip's empty part always toggles maximized;
   Chrome follows the desktop's caption preference (GTK's
   `gtk-titlebar-double-click`, macOS's `AppleActionOnDoubleClick`), whose
