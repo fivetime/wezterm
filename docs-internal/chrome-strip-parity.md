@@ -58,8 +58,11 @@ elevation 2 is);
 `region.caption_clicks` (the strip's empty part is the window's caption:
 a press records the drag, which begins on motion past 8 DIP, Chrome's
 Linux threshold, so a double-click's second press reaches the window and
-toggles maximized on X11 and Wayland; Windows has the strip as HTCAPTION
-and does both itself; macOS's default double-click action, "Maximize",
+toggles maximized on X11 and Wayland; the drag itself is then the
+platform's: X11's _NET_WM_MOVERESIZE, Wayland's xdg move, and on macOS
+`performWindowDragWithEvent:` with the press, as Chrome's
+`cr_mouseDownOnFrameView` does for its caption; Windows has the strip as
+HTCAPTION and does both itself; macOS's default double-click action, "Maximize",
 is the zoom `maximize` performs — the Fill/Minimize/None preferences are
 not read, see the known differences);
 `tab_search.leading_button` (28 round, 6 into the region, the tabs' strip
