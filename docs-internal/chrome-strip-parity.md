@@ -37,6 +37,24 @@ margin); `ntb.position` (6 past the last tab, 6 down the strip) and
 `ntb.button_size` 28 with its 16 icon and 14 radius; `region.grab_handle`
 (42 DIP kept free after the new-tab button, before the caption buttons,
 however full the strip: room to drag the window by);
+`frame.corners_per_platform` (one rule of Chrome's, checked 2026-09-26:
+the window's corners and shadow are the platform's where the platform
+draws the frame — Windows 11's DWM rounds every ordinary top-level
+window, Chrome sets no corner preference for browser windows and
+neither does the fork, both measured round on the same desktop; macOS's
+AppKit rounds its windows — and Chrome's own on Linux, where the top
+corners are 8 DIP round when the window is composited (an ARGB visual
+on X11; always on Wayland), not tiled, and Chrome draws the frame, the
+bottom corners square, and the shadow (MD elevation 16 active, 2
+inactive) drawn when the platform takes decoration insets
+(`_GTK_FRAME_EXTENTS` on X11, `set_window_geometry` on Wayland) and is
+composited, none of it when maximized, minimized, full screen or tiled;
+the GTK frame's radius is the theme's. The fork's X11 and Wayland edges
+follow the same conditions. EndeavourOS, KDE on Wayland, both windows
+native Wayland: Chrome's and the fork's top-left corners round with the
+same radius, bottom-left square; the fork's active shadow reached 17 px
+left and 10 px up, Chrome's inactive one was invisible on the sky, as
+elevation 2 is);
 `region.caption_clicks` (the strip's empty part is the window's caption:
 a press records the drag, which begins on motion past 8 DIP, Chrome's
 Linux threshold, so a double-click's second press reaches the window and
@@ -176,6 +194,11 @@ whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
 
 - The toolbar's top line's rounded ends at the window's corners
   (`kToolbarCornerRadius` 8): the terminal's content is square.
+- Chrome falls back to the system frame (square corners, the window
+  manager's decorations) on X11 window managers it does not know or
+  that tile, and draws no shadow under Xfwm4 (`CanSetDecorationInsets`
+  false there); the fork draws its own edge on any X11 window manager
+  and trusts `_GTK_FRAME_EXTENTS` wherever it is advertised.
 - A double-click on the strip's empty part always toggles maximized;
   Chrome follows the desktop's caption preference (GTK's
   `gtk-titlebar-double-click`, macOS's `AppleActionOnDoubleClick`), whose
