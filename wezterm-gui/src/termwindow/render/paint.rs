@@ -16,6 +16,10 @@ pub enum AllowImage {
 impl crate::TermWindow {
     pub fn paint_impl(&mut self, frame: &mut RenderFrame) {
         self.num_frames += 1;
+        // what is about to be shown up to date: a tab activated before
+        // its deferred resize, a title and tab bar update queued
+        self.resize_active_tab_if_stale();
+        self.update_title_if_pending();
         // If nothing on screen needs animating, then we can avoid
         // invalidating as frequently
         *self.has_animation.borrow_mut() = None;

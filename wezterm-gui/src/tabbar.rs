@@ -67,6 +67,11 @@ fn call_format_tab_title(
 ) -> Option<TitleText> {
     match config::run_immediate_with_lua_config(|lua| {
         if let Some(lua) = lua {
+            // called twice per tab per update, each time with every tab
+            // and pane: nothing to build without a handler
+            if !config::lua::has_event_handler(&lua, "format-tab-title") {
+                return Ok(None);
+            }
             let tabs = lua.create_sequence_from(tab_info.iter().cloned())?;
             let panes = lua.create_sequence_from(pane_info.iter().cloned())?;
 

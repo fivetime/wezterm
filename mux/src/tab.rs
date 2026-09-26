@@ -1143,6 +1143,9 @@ impl TabInner {
         }
 
         if let Some(zoomed) = &self.zoomed {
+            if self.size == size {
+                return;
+            }
             self.size = size;
             zoomed.resize(size).ok();
         } else {
@@ -1160,6 +1163,10 @@ impl TabInner {
                 pixel_height: rows * dims.pixel_height,
                 dpi: dims.dpi,
             };
+            if size == current_size {
+                // nothing to resize, nobody to tell
+                return;
+            }
 
             // Update the split nodes with adjusted sizes
             adjust_x_size(

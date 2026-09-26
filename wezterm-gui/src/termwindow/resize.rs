@@ -3,9 +3,17 @@ use crate::utilsprites::RenderMetrics;
 use ::window::{Dimensions, ResizeIncrement, Window, WindowOps, WindowState};
 use config::{ConfigHandle, DimensionContext};
 use mux::Mux;
+use smol::Timer;
 use std::rc::Rc;
+use std::time::Duration;
 use wezterm_font::FontConfiguration;
 use wezterm_term::TerminalSize;
+
+/// How long after the last resize step the other tabs are resized, and how
+/// far apart: a drag's steps come faster than that, and a tab's resize
+/// (its ptys, its scrollback's reflow) takes milliseconds.
+const STALE_TABS_AFTER: Duration = Duration::from_millis(250);
+const STALE_TAB_EVERY: Duration = Duration::from_millis(4);
 
 #[derive(Debug, Clone, Copy)]
 pub struct RowsAndCols {
@@ -68,6 +76,56 @@ impl super::TermWindow {
             modal.reconfigure(self);
         }
         self.emit_window_event("window-resized", None);
+    }
+
+    /// Resizes the next of `stale_tabs` after `after`, unless a later
+    /// resize (a new `tab_resize_generation`) replaced them.
+    fn schedule_stale_tab_resizes(&mut self, after: Duration) {
+        if self.stale_tabs.is_empty() {
+            return;
+        }
+        let generation = self.tab_resize_generation;
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        promise::spawn::spawn(async move {
+            Timer::after(after).await;
+            window.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(
+                move |tw| tw.resize_stale_tab(generation),
+            )));
+        })
+        .detach();
+    }
+
+    /// One of the tabs a resize left for later, then the next one after a
+    /// pause (a timer, so that input and paints come between).
+    fn resize_stale_tab(&mut self, generation: usize) {
+        if generation != self.tab_resize_generation {
+            return;
+        }
+        let Some(tab_id) = self.stale_tabs.pop() else {
+            return;
+        };
+        if let Some(tab) = Mux::get().get_tab(tab_id) {
+            tab.resize(self.terminal_size);
+        }
+        self.schedule_stale_tab_resizes(STALE_TAB_EVERY);
+    }
+
+    /// The tab about to be painted, if a resize left it for later (it was
+    /// activated before its turn came).
+    pub fn resize_active_tab_if_stale(&mut self) {
+        if self.stale_tabs.is_empty() {
+            return;
+        }
+        let Some(tab) = Mux::get().get_active_tab_for_window(self.mux_window_id) else {
+            return;
+        };
+        let tab_id = tab.tab_id();
+        if let Some(i) = self.stale_tabs.iter().position(|id| *id == tab_id) {
+            self.stale_tabs.swap_remove(i);
+            tab.resize(self.terminal_size);
+        }
     }
 
     pub fn apply_pending_scale_changes(&mut self) {
@@ -292,12 +350,28 @@ impl super::TermWindow {
 
         self.terminal_size = size;
 
+        // the active tab now; the others once the resizing rests, one at a
+        // time between other events (`resize_stale_tab`), or when shown
+        // (`resize_active_tab_if_stale`). Resizing a tab resizes its
+        // panes' ptys and reflows their scrollback: all of them on every
+        // step of a drag made each step as slow as the tab count.
         let mux = Mux::get();
+        let active = mux
+            .get_active_tab_for_window(self.mux_window_id)
+            .map(|tab| tab.tab_id());
+        let mut stale = vec![];
         if let Some(window) = mux.get_window(self.mux_window_id) {
             for tab in window.iter_tabs() {
-                tab.resize(size);
+                if Some(tab.tab_id()) == active {
+                    tab.resize(size);
+                } else {
+                    stale.push(tab.tab_id());
+                }
             }
         };
+        self.stale_tabs = stale;
+        self.tab_resize_generation += 1;
+        self.schedule_stale_tab_resizes(STALE_TABS_AFTER);
         self.resize_overlays();
         self.invalidate_fancy_tab_bar();
         self.update_title();

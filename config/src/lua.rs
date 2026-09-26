@@ -792,6 +792,18 @@ pub async fn emit_event<'lua>(
     }
 }
 
+/// Whether `wezterm.on(name, ...)` registered a handler: a caller of
+/// `emit_sync_callback` can skip building the arguments (every tab and
+/// pane as Lua userdata, a copy of the whole configuration) when none
+/// would receive them.
+pub fn has_event_handler(lua: &Lua, name: &str) -> bool {
+    let decorated_name = format!("wezterm-event-{}", name);
+    match lua.named_registry_value::<mlua::Value>(&decorated_name) {
+        Ok(mlua::Value::Table(tbl)) => tbl.sequence_values::<mlua::Function>().next().is_some(),
+        _ => false,
+    }
+}
+
 pub fn emit_sync_callback<'lua, A>(
     lua: &'lua Lua,
     (name, args): (String, A),

@@ -450,6 +450,11 @@ impl Pane for LocalPane {
     }
 
     fn resize(&self, size: TerminalSize) -> Result<(), Error> {
+        // the same size again (a tab resized to what it has): no pty call
+        // (ConPTY's is a round trip to conhost), no reflow
+        if self.terminal.lock().get_size() == size {
+            return Ok(());
+        }
         self.pty.lock().resize(PtySize {
             rows: size.rows.try_into()?,
             cols: size.cols.try_into()?,

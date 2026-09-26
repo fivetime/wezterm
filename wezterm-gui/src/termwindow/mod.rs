@@ -439,6 +439,15 @@ pub struct TermWindow {
     current_highlight: Option<Arc<Hyperlink>>,
 
     quad_generation: usize,
+    /// A title and tab bar update is queued (`update_title_impl`): the
+    /// requests made meanwhile are one update.
+    title_update_pending: bool,
+    /// The window's tabs not yet resized to `terminal_size`: a resize
+    /// applies to the active tab at once and to these afterwards, one at a
+    /// time (`resize_stale_tab`), or when one of them is shown.
+    stale_tabs: Vec<TabId>,
+    /// Which resize `stale_tabs` belongs to: a later one reschedules.
+    tab_resize_generation: usize,
     shape_generation: usize,
     shape_cache: RefCell<LfuCache<ShapeCacheKey, anyhow::Result<Rc<Vec<ShapedInfo>>>>>,
     line_to_ele_shape_cache: RefCell<LfuCache<LineToEleShapeCacheKey, LineToElementShapeItem>>,
@@ -758,6 +767,9 @@ impl TermWindow {
             last_mouse_click: None,
             current_highlight: None,
             quad_generation: 0,
+            title_update_pending: false,
+            stale_tabs: vec![],
+            tab_resize_generation: 0,
             shape_generation: 0,
             shape_cache: RefCell::new(LfuCache::new(
                 "shape_cache.hit.rate",
@@ -1985,7 +1997,33 @@ impl TermWindow {
         self.update_title_impl();
     }
 
+    /// Brings the title and the tab bar up to date soon, once: after the
+    /// events queued now (a resize's notifications, one per tab), or
+    /// before the next paint, whichever comes first. Each update asks
+    /// every tab and pane for its title, state and progress (their
+    /// terminals' locks), so updating once per request made a resize step
+    /// with many tabs cost that many updates.
     fn update_title_impl(&mut self) {
+        if self.title_update_pending {
+            return;
+        }
+        self.title_update_pending = true;
+        match self.window.as_ref() {
+            Some(window) => window.notify(TermWindowNotif::Apply(Box::new(|tw| {
+                tw.update_title_if_pending();
+            }))),
+            None => self.update_title_if_pending(),
+        }
+    }
+
+    /// The queued title and tab bar update, if there is one.
+    pub(crate) fn update_title_if_pending(&mut self) {
+        if std::mem::take(&mut self.title_update_pending) {
+            self.update_title_now();
+        }
+    }
+
+    fn update_title_now(&mut self) {
         let _timer = crate::stats::Timed::new("gui.update_title");
         let mux = Mux::get();
         let window = match mux.get_window(self.mux_window_id) {
@@ -2047,6 +2085,9 @@ impl TermWindow {
 
         let title = match config::run_immediate_with_lua_config(|lua| {
             if let Some(lua) = lua {
+                if !config::lua::has_event_handler(&lua, "format-window-title") {
+                    return Ok(None);
+                }
                 let tabs = lua.create_sequence_from(tabs.clone().into_iter())?;
                 let panes = lua.create_sequence_from(panes.clone().into_iter())?;
 
