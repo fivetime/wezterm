@@ -293,8 +293,7 @@ impl crate::TermWindow {
                         .tabs
                         .iter()
                         .rfind(|t| t.visible)
-                        .map_or(0., |t| t.body.right())
-                        + chrome_strip::dip(chrome_tabs::GAP / 2., scale);
+                        .map_or(0., |t| t.body.right());
                     let pad_x = ((button.w - plus.w) / 2. - 1.).max(0.).floor();
                     let pad_top = (plus.y - button.y - 1.).max(0.).round();
                     let pad_bottom = (button.h - 2. - plus.h - pad_top).max(0.);
@@ -405,9 +404,24 @@ impl crate::TermWindow {
                     element
                         .vertical_align(VerticalAlign::Top)
                         .item_type(UIItemType::TabBar(item.item.clone()))
+                        // each tab exactly where the layout puts it: the
+                        // gap to the previous tab shown as its left margin,
+                        // none on the right. Two margins of GAP/2 rounded
+                        // each to whole pixels made every tab a fraction of
+                        // a pixel wider than the layout's, and with many
+                        // tabs the new-tab button, placed after the last
+                        // one, went past the strip into the caption buttons
                         .margin(BoxDimension {
-                            left: dip(chrome_tabs::GAP / 2.),
-                            right: dip(chrome_tabs::GAP / 2.),
+                            left: match layout.tabs[..tab_idx.min(layout.tabs.len())]
+                                .iter()
+                                .rfind(|p| p.visible)
+                            {
+                                Some(previous) => {
+                                    Dimension::Pixels(t.body.x - previous.body.right())
+                                }
+                                None => dip(chrome_tabs::GAP / 2.),
+                            },
+                            right: dip(0.),
                             top: Dimension::Pixels(layout.tab_top),
                             bottom: Dimension::Pixels(
                                 layout.height - layout.tab_top - layout.tab_height,
@@ -948,7 +962,6 @@ impl crate::TermWindow {
             anyhow::anyhow!("paint_fancy_tab_bar called but fancy_tab_bar is None")
         })?;
         let ui_items = computed.ui_items();
-
         let gl_state = self.render_state.as_ref().unwrap();
         if self.config.tab_strip_style == config::TabStripStyle::Chrome {
             self.paint_chrome_tabs(computed)?;
