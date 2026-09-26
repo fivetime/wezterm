@@ -92,10 +92,10 @@ impl crate::TermWindow {
             for idx in 0..3 {
                 let vb = &layer.vb.borrow()[idx];
                 let (vertex_count, index_count) = vb.vertex_index_count();
-                let vertex_buffer;
                 let uniforms;
                 if vertex_count > 0 {
-                    let mut vertices = vb.current_vb_mut();
+                    vb.upload()?;
+                    let (gpu, index) = vb.gpu();
                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Render Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -137,11 +137,11 @@ impl crate::TermWindow {
                     render_pass.set_bind_group(0, &uniforms, &[]);
                     render_pass.set_bind_group(1, &texture_linear_bind_group, &[]);
                     render_pass.set_bind_group(2, &texture_nearest_bind_group, &[]);
-                    vertex_buffer = vertices.webgpu_mut().recreate();
-                    vertex_buffer.unmap();
-                    render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-                    render_pass
-                        .set_index_buffer(vb.indices.webgpu().slice(..), wgpu::IndexFormat::Uint32);
+                    render_pass.set_vertex_buffer(0, gpu.vertices(index).webgpu().slice(..));
+                    render_pass.set_index_buffer(
+                        gpu.indices.webgpu().slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
                     render_pass.draw_indexed(0..index_count as _, 0, 0..1);
                 }
 
@@ -265,7 +265,8 @@ impl crate::TermWindow {
                 let vb = &layer.vb.borrow()[idx];
                 let (vertex_count, index_count) = vb.vertex_index_count();
                 if vertex_count > 0 {
-                    let vertices = vb.current_vb_mut();
+                    vb.upload()?;
+                    let (gpu, index) = vb.gpu();
                     let subpixel_aa = use_subpixel && idx == 1;
 
                     let mut uniforms = UniformBuilder::default();
@@ -281,8 +282,8 @@ impl crate::TermWindow {
                     uniforms.add_struct("rapid_blink", &rapid_blink);
 
                     frame.draw(
-                        vertices.glium().slice(0..vertex_count).unwrap(),
-                        vb.indices.glium().slice(0..index_count).unwrap(),
+                        gpu.vertices(index).glium().slice(0..vertex_count).unwrap(),
+                        gpu.indices.glium().slice(0..index_count).unwrap(),
                         gl_state.glyph_prog.as_ref().unwrap(),
                         &uniforms,
                         if layer.zindex() == ERASE_ZINDEX {

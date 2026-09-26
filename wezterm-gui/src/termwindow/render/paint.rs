@@ -40,19 +40,10 @@ impl crate::TermWindow {
 
         'pass: for pass in 0.. {
             match self.paint_pass() {
-                Ok(_) => match self.render_state.as_mut().unwrap().allocated_more_quads() {
-                    Ok(allocated) => {
-                        if !allocated {
-                            break 'pass;
-                        }
-                        self.invalidate_fancy_tab_bar();
-                        self.invalidate_modal();
-                    }
-                    Err(err) => {
-                        log::error!("{:#}", err);
-                        break 'pass;
-                    }
-                },
+                // a frame drawing more quads than the GPU buffers hold
+                // grows them as it is uploaded (`TripleVertexBuffer::upload`)
+                // rather than being painted again
+                Ok(_) => break 'pass,
                 Err(err) => {
                     if let Some(&OutOfTextureSpace {
                         size: Some(size),
@@ -186,14 +177,11 @@ impl crate::TermWindow {
         let window_is_transparent =
             !self.window_background.is_empty() || self.config.window_background_opacity != 1.0;
 
-        let start = Instant::now();
         let gl_state = self.render_state.as_ref().unwrap();
         let layer = gl_state
             .layer_for_zindex(0)
             .context("layer_for_zindex(0)")?;
         let mut layers = layer.quad_allocator();
-        log::trace!("quad map elapsed {:?}", start.elapsed());
-        metrics::histogram!("quad.map").record(start.elapsed());
 
         let mut paint_terminal_background = false;
 

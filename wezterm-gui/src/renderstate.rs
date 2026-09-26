@@ -5,7 +5,6 @@ use crate::termwindow::webgpu::{adapter_info_to_gpu_info, WebGpuState, WebGpuTex
 use ::window::bitmaps::atlas::OutOfTextureSpace;
 use ::window::bitmaps::Texture2d;
 use ::window::glium::backend::Context as GliumContext;
-use ::window::glium::buffer::{BufferMutSlice, Mapping};
 use ::window::glium::{
     CapabilitiesSource, IndexBuffer as GliumIndexBuffer, VertexBuffer as GliumVertexBuffer,
 };
@@ -42,25 +41,16 @@ impl RenderContext {
         }
     }
 
-    pub fn allocate_vertex_buffer_initializer(&self, num_quads: usize) -> Vec<Vertex> {
+    pub fn allocate_vertex_buffer(&self, num_quads: usize) -> anyhow::Result<VertexBuffer> {
         match self {
-            Self::Glium(_) => {
-                vec![Vertex::default(); num_quads * VERTICES_PER_CELL]
-            }
-            Self::WebGpu(_) => vec![],
-        }
-    }
-
-    pub fn allocate_vertex_buffer(
-        &self,
-        num_quads: usize,
-        initializer: &[Vertex],
-    ) -> anyhow::Result<VertexBuffer> {
-        match self {
-            Self::Glium(context) => Ok(VertexBuffer::Glium(GliumVertexBuffer::dynamic(
-                context,
-                initializer,
-            )?)),
+            Self::Glium(context) => Ok(VertexBuffer::Glium(
+                match GliumVertexBuffer::empty_persistent(context, num_quads * VERTICES_PER_CELL) {
+                    Ok(vb) => vb,
+                    Err(_) => {
+                        GliumVertexBuffer::empty_dynamic(context, num_quads * VERTICES_PER_CELL)?
+                    }
+                },
+            )),
             Self::WebGpu(state) => Ok(VertexBuffer::WebGpu(WebGpuVertexBuffer::new(
                 num_quads * VERTICES_PER_CELL,
                 state,
@@ -159,46 +149,34 @@ impl VertexBuffer {
             _ => unreachable!(),
         }
     }
-    pub fn webgpu_mut(&mut self) -> &mut WebGpuVertexBuffer {
-        match self {
-            Self::WebGpu(g) => g,
-            _ => unreachable!(),
-        }
-    }
-}
 
-enum MappedVertexBuffer {
-    Glium(GliumMappedVertexBuffer),
-    WebGpu(WebGpuMappedVertexBuffer),
-}
-
-impl MappedVertexBuffer {
-    fn slice_mut(&mut self, range: std::ops::Range<usize>) -> &mut [Vertex] {
+    /// Copies `vertices` to the start of the buffer: only the bytes a
+    /// frame drew cross to the GPU. OpenGL's buffers are persistently
+    /// mapped where the driver can (ARB_buffer_storage), so this is a
+    /// memcpy once glium's fence says the GPU is done with the buffer;
+    /// elsewhere glBufferSubData. Mapping the whole buffer for reading
+    /// and writing every frame, as before, cost ~2.3 ms per layer
+    /// (AMD's GL 4.5 on Windows), and glBufferSubData still ~0.2 ms a
+    /// call and 2 ms for a pane's 400 KB there. wgpu queues the write.
+    fn upload(&self, vertices: &[Vertex]) -> anyhow::Result<()> {
         match self {
-            Self::Glium(g) => &mut g.mapping[range],
-            Self::WebGpu(g) => {
-                let mapping: &mut [Vertex] = bytemuck::cast_slice_mut(&mut g.mapping);
-                &mut mapping[range]
+            Self::Glium(vb) => {
+                vb.slice(0..vertices.len())
+                    .ok_or_else(|| anyhow::anyhow!("vertex buffer smaller than its upload"))?
+                    .write(vertices);
+            }
+            Self::WebGpu(vb) => {
+                vb.state
+                    .queue
+                    .write_buffer(&vb.buf, 0, bytemuck::cast_slice(vertices));
             }
         }
+        Ok(())
     }
-}
-
-pub struct MappedQuads<'a> {
-    mapping: MappedVertexBuffer,
-    next: RefMut<'a, usize>,
-    capacity: usize,
-}
-
-pub struct WebGpuMappedVertexBuffer {
-    mapping: wgpu::BufferViewMut<'static>,
-    // Owner mapping, must be dropped after mapping
-    _slice: wgpu::BufferSlice<'static>,
 }
 
 pub struct WebGpuVertexBuffer {
     buf: wgpu::Buffer,
-    num_vertices: usize,
     state: Rc<WebGpuState>,
 }
 
@@ -215,35 +193,11 @@ impl WebGpuVertexBuffer {
             buf: state.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Vertex Buffer"),
                 size: (num_vertices * std::mem::size_of::<Vertex>()) as wgpu::BufferAddress,
-                usage: wgpu::BufferUsages::VERTEX,
-                mapped_at_creation: true,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             }),
-            num_vertices,
             state: Rc::clone(state),
         }
-    }
-
-    pub fn map(&self) -> WebGpuMappedVertexBuffer {
-        unsafe {
-            let slice = self.buf.slice(..).extend_lifetime();
-            let mapping = slice.get_mapped_range_mut();
-
-            WebGpuMappedVertexBuffer {
-                mapping,
-                _slice: slice,
-            }
-        }
-    }
-
-    pub fn recreate(&mut self) -> wgpu::Buffer {
-        let mut new_buf = self.state.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Vertex Buffer"),
-            size: (self.num_vertices * std::mem::size_of::<Vertex>()) as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::VERTEX,
-            mapped_at_creation: true,
-        });
-        std::mem::swap(&mut new_buf, &mut self.buf);
-        new_buf
     }
 }
 
@@ -272,33 +226,34 @@ impl WebGpuIndexBuffer {
     }
 }
 
-/// This is a self-referential struct, but since those are not possible
-/// to create safely in unstable rust, we transmute the lifetimes away
-/// to static and store the owner (RefMut) and the derived Mapping object
-/// in this struct
-pub struct GliumMappedVertexBuffer {
-    mapping: Mapping<'static, [Vertex]>,
-    // Drop the owner after the mapping
-    _owner: RefMut<'static, VertexBuffer>,
+/// A layer's quads for this frame, gathered on the CPU
+pub struct MappedQuads<'a> {
+    shadow: RefMut<'a, Vec<Vertex>>,
+    next: RefMut<'a, usize>,
+}
+
+impl<'a> MappedQuads<'a> {
+    /// Makes room for `quads` more quads: running past what the GPU
+    /// buffers hold only grows this array, and the buffers grow when it
+    /// is uploaded (`TripleVertexBuffer::upload`), rather than the frame
+    /// being painted a second time into larger ones
+    fn reserve(&mut self, quads: usize) -> std::ops::Range<usize> {
+        let start = *self.next * VERTICES_PER_CELL;
+        *self.next += quads;
+        let end = *self.next * VERTICES_PER_CELL;
+        if end > self.shadow.len() {
+            let len = end.max(self.shadow.len() + self.shadow.len() / 2);
+            self.shadow.resize(len, Vertex::default());
+        }
+        start..end
+    }
 }
 
 impl<'a> QuadAllocator for MappedQuads<'a> {
     fn allocate<'b>(&'b mut self) -> anyhow::Result<QuadImpl<'b>> {
-        let idx = *self.next;
-        *self.next += 1;
-        let idx = if idx >= self.capacity {
-            // We don't have enough quads, so we'll keep re-using
-            // the first quad until we reach the end of the render
-            // pass, at which point we'll detect this condition
-            // and re-allocate the quads.
-            0
-        } else {
-            idx
-        };
-
-        let idx = idx * VERTICES_PER_CELL;
+        let range = self.reserve(1);
         let mut quad = Quad {
-            vert: self.mapping.slice_mut(idx..idx + VERTICES_PER_CELL),
+            vert: &mut self.shadow[range],
         };
 
         quad.set_has_color(false);
@@ -307,30 +262,63 @@ impl<'a> QuadAllocator for MappedQuads<'a> {
     }
 
     fn extend_with(&mut self, vertices: &[Vertex]) {
-        let idx = *self.next;
-        let len = vertices.len();
+        let range = self.reserve(vertices.len() / VERTICES_PER_CELL);
+        self.shadow[range].copy_from_slice(vertices);
+    }
+}
 
-        // idx and next are number of quads, so divide by number of vertices
-        *self.next += len / VERTICES_PER_CELL;
-        // Only copy in if there is enough room.
-        // We'll detect the out of space condition at the end of
-        // the render pass.
-        let idx = idx * VERTICES_PER_CELL;
-        let capacity = self.capacity * VERTICES_PER_CELL;
-        if idx + len <= capacity {
-            self.mapping
-                .slice_mut(idx..idx + len)
-                .copy_from_slice(vertices);
+/// The GPU side of a `TripleVertexBuffer`: three vertex buffers used in
+/// turn, so that the one being filled is not one the GPU may still be
+/// drawing from, and the indices of their quads
+pub struct GpuQuads {
+    bufs: [VertexBuffer; 3],
+    pub indices: IndexBuffer,
+    capacity: usize,
+}
+
+impl GpuQuads {
+    fn new(context: &RenderContext, num_quads: usize) -> anyhow::Result<Self> {
+        let mut indices = Vec::with_capacity(num_quads * INDICES_PER_CELL);
+        for q in 0..num_quads {
+            let idx = (q * VERTICES_PER_CELL) as u32;
+
+            // Emit two triangles to form the glyph quad
+            indices.push(idx + V_TOP_LEFT as u32);
+            indices.push(idx + V_TOP_RIGHT as u32);
+            indices.push(idx + V_BOT_LEFT as u32);
+
+            indices.push(idx + V_TOP_RIGHT as u32);
+            indices.push(idx + V_BOT_LEFT as u32);
+            indices.push(idx + V_BOT_RIGHT as u32);
         }
+        log::trace!(
+            "GpuQuads num_quads={}, {} bytes per buffer",
+            num_quads,
+            num_quads * VERTICES_PER_CELL * std::mem::size_of::<Vertex>()
+        );
+        Ok(Self {
+            bufs: [
+                context.allocate_vertex_buffer(num_quads)?,
+                context.allocate_vertex_buffer(num_quads)?,
+                context.allocate_vertex_buffer(num_quads)?,
+            ],
+            indices: context.allocate_index_buffer(&indices)?,
+            capacity: num_quads,
+        })
+    }
+
+    pub fn vertices(&self, index: usize) -> &VertexBuffer {
+        &self.bufs[index]
     }
 }
 
 pub struct TripleVertexBuffer {
     pub index: RefCell<usize>,
-    pub bufs: RefCell<[VertexBuffer; 3]>,
-    pub indices: IndexBuffer,
-    pub capacity: usize,
+    gpu: RefCell<GpuQuads>,
+    /// This frame's quads, gathered before they are uploaded
+    shadow: RefCell<Vec<Vertex>>,
     pub next_quad: RefCell<usize>,
+    context: RenderContext,
 }
 
 /// A trait to avoid broadly-scoped transmutes; we only want to
@@ -350,20 +338,6 @@ unsafe impl<'a, T: 'static> ExtendStatic for Ref<'a, T> {
     }
 }
 
-unsafe impl<'a, T: 'static> ExtendStatic for RefMut<'a, T> {
-    type T = RefMut<'static, T>;
-    unsafe fn extend_lifetime(self) -> Self::T {
-        std::mem::transmute(self)
-    }
-}
-
-unsafe impl<'a> ExtendStatic for wgpu::BufferSlice<'a> {
-    type T = wgpu::BufferSlice<'static>;
-    unsafe fn extend_lifetime(self) -> Self::T {
-        std::mem::transmute(self)
-    }
-}
-
 unsafe impl<'a> ExtendStatic for MappedQuads<'a> {
     type T = MappedQuads<'static>;
     unsafe fn extend_lifetime(self) -> Self::T {
@@ -371,27 +345,19 @@ unsafe impl<'a> ExtendStatic for MappedQuads<'a> {
     }
 }
 
-unsafe impl<'a, T: ?Sized + ::window::glium::buffer::Content + 'static> ExtendStatic
-    for BufferMutSlice<'a, T>
-{
-    type T = BufferMutSlice<'static, T>;
-    unsafe fn extend_lifetime(self) -> Self::T {
-        std::mem::transmute(self)
-    }
-}
-
 impl TripleVertexBuffer {
+    fn new(context: &RenderContext, num_quads: usize) -> anyhow::Result<Self> {
+        Ok(Self {
+            index: RefCell::new(0),
+            gpu: RefCell::new(GpuQuads::new(context, num_quads)?),
+            shadow: RefCell::new(vec![Vertex::default(); num_quads * VERTICES_PER_CELL]),
+            next_quad: RefCell::new(0),
+            context: context.clone(),
+        })
+    }
+
     pub fn clear_quad_allocation(&self) {
         *self.next_quad.borrow_mut() = 0;
-    }
-
-    pub fn need_more_quads(&self) -> Option<usize> {
-        let next = *self.next_quad.borrow();
-        if next > self.capacity {
-            Some(next)
-        } else {
-            None
-        }
     }
 
     pub fn vertex_index_count(&self) -> (usize, usize) {
@@ -400,46 +366,37 @@ impl TripleVertexBuffer {
     }
 
     pub fn map(&self) -> MappedQuads<'_> {
-        let mut bufs = self.current_vb_mut();
-
-        // To map the vertex buffer, we need to hold a mutable reference to
-        // the buffer and hold the mapping object alive for the duration
-        // of the access.  Rust doesn't allow us to create a struct that
-        // holds both of those things, because one references the other
-        // and it doesn't permit self-referential structs.
-        // We use the very blunt instrument "transmute" to force Rust to
-        // treat the lifetimes of both of these things as static, which
-        // we can then store in the same struct.
-        // This is "safe" because we carry them around together and ensure
-        // that the owner is dropped after the derived data.
-        let mapping = match &mut *bufs {
-            VertexBuffer::Glium(vb) => {
-                let buf_slice = unsafe {
-                    vb.slice_mut(..)
-                        .expect("to map vertex buffer")
-                        .extend_lifetime()
-                };
-                let mapping = buf_slice.map();
-
-                MappedVertexBuffer::Glium(GliumMappedVertexBuffer {
-                    _owner: bufs,
-                    mapping,
-                })
-            }
-            VertexBuffer::WebGpu(vb) => MappedVertexBuffer::WebGpu(vb.map()),
-        };
-
         MappedQuads {
-            mapping,
+            shadow: self.shadow.borrow_mut(),
             next: self.next_quad.borrow_mut(),
-            capacity: self.capacity,
         }
     }
 
-    pub fn current_vb_mut(&self) -> RefMut<'static, VertexBuffer> {
-        let index = *self.index.borrow();
-        let bufs = self.bufs.borrow_mut();
-        unsafe { RefMut::map(bufs, |bufs| &mut bufs[index]).extend_lifetime() }
+    /// Hands this frame's quads to the vertex buffer whose turn it is,
+    /// growing the buffers first (by half again, in steps of 128 quads)
+    /// when the frame drew more than they hold
+    pub fn upload(&self) -> anyhow::Result<()> {
+        let quads = *self.next_quad.borrow();
+        if quads == 0 {
+            return Ok(());
+        }
+        let capacity = self.gpu.borrow().capacity;
+        if quads > capacity {
+            let num_quads = (quads.max(capacity + capacity / 2) + 127) & !127;
+            *self.gpu.borrow_mut() =
+                GpuQuads::new(&self.context, num_quads).with_context(|| {
+                    format!("Failed to allocate {num_quads} quads (needed {quads})")
+                })?;
+        }
+        let _t = crate::stats::Timed::new("quad.upload");
+        let gpu = self.gpu.borrow();
+        let shadow = self.shadow.borrow();
+        gpu.bufs[*self.index.borrow()].upload(&shadow[..quads * VERTICES_PER_CELL])
+    }
+
+    /// The GPU buffers, and which vertex buffer's turn it is
+    pub fn gpu(&self) -> (Ref<'_, GpuQuads>, usize) {
+        (self.gpu.borrow(), *self.index.borrow())
     }
 
     pub fn next_index(&self) {
@@ -453,7 +410,6 @@ impl TripleVertexBuffer {
 
 pub struct RenderLayer {
     pub vb: RefCell<[TripleVertexBuffer; 3]>,
-    context: RenderContext,
     zindex: i8,
 }
 
@@ -477,13 +433,12 @@ impl RenderLayer {
 
     pub fn new(context: &RenderContext, num_quads: usize, zindex: i8) -> anyhow::Result<Self> {
         let vb = [
-            Self::compute_vertices(context, 32)?,
-            Self::compute_vertices(context, num_quads)?,
-            Self::compute_vertices(context, 32)?,
+            TripleVertexBuffer::new(context, 32)?,
+            TripleVertexBuffer::new(context, num_quads)?,
+            TripleVertexBuffer::new(context, 32)?,
         ];
 
         Ok(Self {
-            context: context.clone(),
             vb: RefCell::new(vb),
             zindex,
         })
@@ -510,63 +465,6 @@ impl RenderLayer {
                 _owner: vbs,
             })
         }
-    }
-
-    pub fn need_more_quads(&self, vb_idx: usize) -> Option<usize> {
-        self.vb.borrow()[vb_idx].need_more_quads()
-    }
-
-    pub fn reallocate_quads(&self, idx: usize, num_quads: usize) -> anyhow::Result<()> {
-        let vb = Self::compute_vertices(&self.context, num_quads)?;
-        self.vb.borrow_mut()[idx] = vb;
-        Ok(())
-    }
-
-    /// Compute a vertex buffer to hold the quads that comprise the visible
-    /// portion of the screen.   We recreate this when the screen is resized.
-    /// The idea is that we want to minimize any heavy lifting and computation
-    /// and instead just poke some attributes into the offset that corresponds
-    /// to a changed cell when we need to repaint the screen, and then just
-    /// let the GPU figure out the rest.
-    fn compute_vertices(
-        context: &RenderContext,
-        num_quads: usize,
-    ) -> anyhow::Result<TripleVertexBuffer> {
-        let verts = context.allocate_vertex_buffer_initializer(num_quads);
-        log::trace!(
-            "compute_vertices num_quads={}, allocated {} bytes",
-            num_quads,
-            verts.len() * std::mem::size_of::<Vertex>()
-        );
-        let mut indices = vec![];
-        indices.reserve(num_quads * INDICES_PER_CELL);
-
-        for q in 0..num_quads {
-            let idx = (q * VERTICES_PER_CELL) as u32;
-
-            // Emit two triangles to form the glyph quad
-            indices.push(idx + V_TOP_LEFT as u32);
-            indices.push(idx + V_TOP_RIGHT as u32);
-            indices.push(idx + V_BOT_LEFT as u32);
-
-            indices.push(idx + V_TOP_RIGHT as u32);
-            indices.push(idx + V_BOT_LEFT as u32);
-            indices.push(idx + V_BOT_RIGHT as u32);
-        }
-
-        let buffer = TripleVertexBuffer {
-            index: RefCell::new(0),
-            bufs: RefCell::new([
-                context.allocate_vertex_buffer(num_quads, &verts)?,
-                context.allocate_vertex_buffer(num_quads, &verts)?,
-                context.allocate_vertex_buffer(num_quads, &verts)?,
-            ]),
-            capacity: num_quads,
-            indices: context.allocate_index_buffer(&indices)?,
-            next_quad: RefCell::new(0),
-        };
-
-        Ok(buffer)
     }
 }
 
@@ -656,34 +554,6 @@ impl RenderState {
         layers.sort_by(|a, b| a.zindex.cmp(&b.zindex));
 
         Ok(layer)
-    }
-
-    /// Returns true if any of the layers needed more quads to be allocated,
-    /// and if we successfully allocated them.
-    /// Returns false if the quads were sufficient.
-    /// Returns Err if we needed to allocate but failed.
-    pub fn allocated_more_quads(&mut self) -> anyhow::Result<bool> {
-        let mut allocated = false;
-
-        for layer in self.layers.borrow().iter() {
-            for vb_idx in 0..3 {
-                if let Some(need_quads) = layer.need_more_quads(vb_idx) {
-                    // Round up to next multiple of 128 that is >=
-                    // the number of needed quads for this frame
-                    let num_quads = (need_quads + 127) & !127;
-                    layer.reallocate_quads(vb_idx, num_quads).with_context(|| {
-                        format!(
-                            "Failed to allocate {} quads (needed {})",
-                            num_quads, need_quads,
-                        )
-                    })?;
-                    log::trace!("Allocated {} quads (needed {})", num_quads, need_quads);
-                    allocated = true;
-                }
-            }
-        }
-
-        Ok(allocated)
     }
 
     fn compile_prog(
