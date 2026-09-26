@@ -260,24 +260,35 @@ mod cglbits {
     impl GlState {
         pub fn create(view: id) -> anyhow::Result<Self> {
             log::trace!("Calling NSOpenGLPixelFormat::initWithAttributes");
-            let pixel_format = unsafe {
-                StrongPtr::new(NSOpenGLPixelFormat::alloc(nil).initWithAttributes_(&[
-                    appkit::NSOpenGLPFAOpenGLProfile as u32,
-                    appkit::NSOpenGLProfileVersion3_2Core as u32,
-                    appkit::NSOpenGLPFAClosestPolicy as u32,
-                    appkit::NSOpenGLPFAColorSize as u32,
-                    32,
-                    appkit::NSOpenGLPFAAlphaSize as u32,
-                    8,
-                    appkit::NSOpenGLPFADepthSize as u32,
-                    24,
-                    appkit::NSOpenGLPFAStencilSize as u32,
-                    8,
+            let mut attributes = vec![
+                appkit::NSOpenGLPFAOpenGLProfile as u32,
+                appkit::NSOpenGLProfileVersion3_2Core as u32,
+                appkit::NSOpenGLPFAClosestPolicy as u32,
+                appkit::NSOpenGLPFAColorSize as u32,
+                32,
+                appkit::NSOpenGLPFAAlphaSize as u32,
+                8,
+                appkit::NSOpenGLPFADepthSize as u32,
+                24,
+                appkit::NSOpenGLPFAStencilSize as u32,
+                8,
+            ];
+            if crate::configuration::prefer_swrast() {
+                // `front_end = "Software"`: drawn by the CPU, as it is
+                // with Mesa's llvmpipe elsewhere, by Apple's software
+                // renderer (kCGLRendererGenericFloatID); otherwise the
+                // accelerated renderer drew it, the GPU after all
+                const GENERIC_FLOAT_RENDERER: u32 = 0x0002_0400;
+                attributes.extend([appkit::NSOpenGLPFARendererID as u32, GENERIC_FLOAT_RENDERER]);
+            } else {
+                attributes.extend([
                     appkit::NSOpenGLPFAAllowOfflineRenderers as u32,
                     appkit::NSOpenGLPFAAccelerated as u32,
-                    appkit::NSOpenGLPFADoubleBuffer as u32,
-                    0,
-                ]))
+                ]);
+            }
+            attributes.extend([appkit::NSOpenGLPFADoubleBuffer as u32, 0]);
+            let pixel_format = unsafe {
+                StrongPtr::new(NSOpenGLPixelFormat::alloc(nil).initWithAttributes_(&attributes))
             };
             log::trace!("NSOpenGLPixelFormat::initWithAttributes returned");
             ensure!(
