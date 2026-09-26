@@ -49,7 +49,17 @@ pub struct TabHoverCard {
     answer: Option<Answer>,
     /// Once built: what it shows, or `None` for no card.
     content: Option<Option<Content>>,
+    /// Once laid out: the card, for where its tab is and the window's
+    /// size and dpi. Laying it out shapes its text and builds its shadow
+    /// rings; a repaint while it shows (output, the cursor's blink) draws
+    /// this again. Dropped with the tab bar's (`invalidate_fancy_tab_bar`:
+    /// the atlas rebuilt, the configuration reloaded).
+    pub(crate) computed: Option<(CardKey, ComputedElement)>,
 }
+
+/// Where the card was laid out: its tab's left and bottom (f32 bits), the
+/// window's pixel width and height and dpi.
+type CardKey = (u32, u32, usize, usize, usize);
 
 #[derive(Clone)]
 struct Content {
@@ -193,6 +203,7 @@ impl crate::TermWindow {
             delay,
             answer: None,
             content: None,
+            computed: None,
         });
         self.update_next_frame_time(Some(since + delay));
 
@@ -306,6 +317,24 @@ impl crate::TermWindow {
             return Ok(());
         };
         let (tab_x, tab_bottom) = (tab.x as f32, (tab.y + tab.height) as f32);
+        let key = (
+            tab_x.to_bits(),
+            tab_bottom.to_bits(),
+            self.dimensions.pixel_width,
+            self.dimensions.pixel_height,
+            self.dimensions.dpi,
+        );
+        if let Some((laid_out, computed)) = self
+            .tab_hover_card
+            .as_ref()
+            .and_then(|c| c.computed.as_ref())
+        {
+            if *laid_out == key {
+                let gl_state = self.render_state.as_ref().unwrap();
+                self.render_element(computed, gl_state, None)?;
+                return Ok(());
+            }
+        }
         let Some(Some(content)) = self.tab_hover_card.as_ref().and_then(|c| c.content.clone())
         else {
             return Ok(());
@@ -469,6 +498,9 @@ impl crate::TermWindow {
             &card,
         )?;
         self.render_element(&computed, gl_state, None)?;
+        if let Some(card) = self.tab_hover_card.as_mut() {
+            card.computed = Some((key, computed));
+        }
         Ok(())
     }
 }

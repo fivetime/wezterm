@@ -85,6 +85,10 @@ const PLUS_BUTTON: &[Poly] = &[
 impl crate::TermWindow {
     pub fn invalidate_fancy_tab_bar(&mut self) {
         self.fancy_tab_bar.take();
+        // (the hover card's layout holds glyphs of the same atlas)
+        if let Some(card) = self.tab_hover_card.as_mut() {
+            card.computed = None;
+        }
     }
 
     pub fn build_fancy_tab_bar(&self, palette: &ColorPalette) -> anyhow::Result<ComputedElement> {
