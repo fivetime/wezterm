@@ -16,6 +16,7 @@ static ENABLE_STAT_PRINT: AtomicBool = AtomicBool::new(true);
 /// in `<name>.rate`, for `periodic_stat_logging`.
 pub struct Timed {
     name: &'static str,
+    rate: &'static str,
     start: Instant,
 }
 
@@ -23,6 +24,7 @@ impl Timed {
     pub fn new(name: &'static str) -> Self {
         Self {
             name,
+            rate: rate_name(name),
             start: Instant::now(),
         }
     }
@@ -31,8 +33,23 @@ impl Timed {
 impl Drop for Timed {
     fn drop(&mut self) {
         metrics::histogram!(self.name).record(self.start.elapsed());
-        metrics::histogram!(format!("{}.rate", self.name)).record(1.);
+        metrics::histogram!(self.rate).record(1.);
     }
+}
+
+/// `<name>.rate`, made once for each name (there are a handful, all
+/// static) rather than formatted at every drop, several times a frame
+fn rate_name(name: &'static str) -> &'static str {
+    thread_local! {
+        static NAMES: std::cell::RefCell<HashMap<&'static str, &'static str>> =
+            std::cell::RefCell::new(HashMap::new());
+    }
+    NAMES.with(|names| {
+        *names
+            .borrow_mut()
+            .entry(name)
+            .or_insert_with(|| Box::leak(format!("{name}.rate").into_boxed_str()))
+    })
 }
 lazy_static::lazy_static! {
     static ref INNER: Arc<Mutex<Inner>> = make_inner();

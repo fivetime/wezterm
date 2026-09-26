@@ -566,10 +566,11 @@ pub struct GlyphCache {
     line_glyphs: HashMap<LineKey, Sprite>,
     pub block_glyphs: HashMap<SizedBlockKey, Sprite>,
     /// SVG icons by file and pixel size; `None` for a file that would not
-    /// draw, so it is not read again
-    icon_glyphs: HashMap<(String, u32), Option<Sprite>>,
+    /// draw, so it is not read again. (By file first: a lookup, several a
+    /// frame, borrows the path rather than allocating a key.)
+    icon_glyphs: HashMap<String, HashMap<u32, Option<Sprite>>>,
     /// Pictures by file and pixel size, as `icon_glyphs`
-    picture_glyphs: HashMap<(String, u32, u32), Option<Sprite>>,
+    picture_glyphs: HashMap<String, HashMap<(u32, u32), Option<Sprite>>>,
     /// Chrome tab shapes by size, radii and filled or outlined
     tab_shapes: HashMap<(u32, u32, u32, u32, bool), Sprite>,
     corner_masks: HashMap<(u32, bool), Sprite>,
@@ -1153,8 +1154,7 @@ impl GlyphCache {
     /// The SVG icon at `path` drawn `size` pixels square, as a white mask
     /// (its coverage); `None`, logged once, when it cannot be drawn.
     pub fn cached_icon(&mut self, path: &str, size: u32) -> anyhow::Result<Option<Sprite>> {
-        let key = (path.to_string(), size);
-        if let Some(sprite) = self.icon_glyphs.get(&key) {
+        if let Some(sprite) = self.icon_glyphs.get(path).and_then(|s| s.get(&size)) {
             return Ok(sprite.clone());
         }
         let sprite = match icon_image(path, size) {
@@ -1164,7 +1164,10 @@ impl GlyphCache {
                 None
             }
         };
-        self.icon_glyphs.insert(key, sprite.clone());
+        self.icon_glyphs
+            .entry(path.to_string())
+            .or_default()
+            .insert(size, sprite.clone());
         Ok(sprite)
     }
 
@@ -1176,8 +1179,8 @@ impl GlyphCache {
         width: u32,
         height: u32,
     ) -> anyhow::Result<Option<Sprite>> {
-        let key = (path.to_string(), width, height);
-        if let Some(sprite) = self.picture_glyphs.get(&key) {
+        let size = (width, height);
+        if let Some(sprite) = self.picture_glyphs.get(path).and_then(|s| s.get(&size)) {
             return Ok(sprite.clone());
         }
         let sprite = match picture_image(path, width, height) {
@@ -1187,7 +1190,10 @@ impl GlyphCache {
                 None
             }
         };
-        self.picture_glyphs.insert(key, sprite.clone());
+        self.picture_glyphs
+            .entry(path.to_string())
+            .or_default()
+            .insert(size, sprite.clone());
         Ok(sprite)
     }
 
