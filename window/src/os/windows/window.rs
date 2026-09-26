@@ -118,6 +118,10 @@ pub(crate) struct WindowInner {
     dead_pending: Option<(Modifiers, u32)>,
     saved_placement: Option<WINDOWPLACEMENT>,
     track_mouse_leave: bool,
+    /// The same for the non-client area (the maximize button, which is
+    /// HTMAXBUTTON for Windows 11's snap layouts): the two are tracked
+    /// apart, each armed by its own moves and ended by its own leave.
+    track_nc_mouse_leave: bool,
     window_drag_position: Option<ScreenPoint>,
     maximize_button_position: Option<ScreenRect>,
 
@@ -542,6 +546,7 @@ impl Window {
             dead_pending: None,
             saved_placement: None,
             track_mouse_leave: false,
+            track_nc_mouse_leave: false,
             window_drag_position: None,
             maximize_button_position: None,
             config: config.clone(),
@@ -1974,8 +1979,8 @@ unsafe fn nc_mouse_move(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) 
     let inner = rc_from_hwnd(hwnd)?;
     let mut inner = inner.borrow_mut();
 
-    if !inner.track_mouse_leave {
-        inner.track_mouse_leave = true;
+    if !inner.track_nc_mouse_leave {
+        inner.track_nc_mouse_leave = true;
 
         let mut trk = TRACKMOUSEEVENT {
             cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
@@ -1984,7 +1989,7 @@ unsafe fn nc_mouse_move(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) 
             dwHoverTime: 0,
         };
 
-        inner.track_mouse_leave = TrackMouseEvent(&mut trk) == winapi::shared::minwindef::TRUE;
+        inner.track_nc_mouse_leave = TrackMouseEvent(&mut trk) == winapi::shared::minwindef::TRUE;
     }
 
     if wparam != HTMAXBUTTON as usize {
@@ -2008,14 +2013,45 @@ unsafe fn nc_mouse_move(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) 
     Some(0)
 }
 
-unsafe fn mouse_leave(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
+unsafe fn mouse_leave(hwnd: HWND, msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
     let inner = rc_from_hwnd(hwnd)?;
     let mut inner = inner.borrow_mut();
 
-    inner.track_mouse_leave = false;
-    inner.events.dispatch(WindowEvent::MouseLeave);
+    if msg == WM_NCMOUSELEAVE {
+        inner.track_nc_mouse_leave = false;
+    } else {
+        inner.track_mouse_leave = false;
+    }
+    // Leaving the client area for the maximize button (non-client for
+    // the snap layouts) or the button for the client area is no leaving
+    // the window: the pointer is still over it, and the move there says
+    // where. Windows can post the leave after that move, and reporting it
+    // then forgot the pointer: the button it had just reached showed no
+    // hover until it moved again.
+    if !pointer_over_client(hwnd) {
+        inner.events.dispatch(WindowEvent::MouseLeave);
+    }
 
     Some(0)
+}
+
+/// Whether the pointer is over `hwnd`'s client area (the caption buttons
+/// included), with no other window in front of it there.
+unsafe fn pointer_over_client(hwnd: HWND) -> bool {
+    let mut point = POINT { x: 0, y: 0 };
+    if GetCursorPos(&mut point) == 0 || WindowFromPoint(point) != hwnd {
+        return false;
+    }
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
+    if GetClientRect(hwnd, &mut rect) == 0 || ScreenToClient(hwnd, &mut point) == 0 {
+        return false;
+    }
+    point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
 }
 
 lazy_static! {
