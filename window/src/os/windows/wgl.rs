@@ -92,12 +92,22 @@ impl WglWrapper {
     }
 
     fn create() -> anyhow::Result<Self> {
+        // Mesa's opengl32.dll (llvmpipe) for `front_end = "Software"`,
+        // loaded by its path: opengl32.dll is one of the system's
+        // KnownDLLs, which a load by name takes from System32 whatever
+        // the DLL directories, so Software drew with the GPU's driver
+        // after all ("OpenGL: AMD Radeon Pro 5600M ... FireGL")
+        let mut mesa = None;
         if crate::configuration::prefer_swrast() {
             let mesa_dir = std::env::current_exe()
                 .unwrap()
                 .parent()
                 .unwrap()
                 .join("mesa");
+            let opengl = mesa_dir.join("opengl32.dll");
+            if opengl.exists() {
+                mesa = Some(opengl);
+            }
             let mesa_dir = wide_string(mesa_dir.to_str().unwrap());
 
             unsafe {
@@ -106,7 +116,11 @@ impl WglWrapper {
             }
         }
 
-        let lib = unsafe { libloading::Library::new("opengl32.dll") }.map_err(|e| {
+        let lib = match &mesa {
+            Some(path) => unsafe { libloading::Library::new(path) },
+            None => unsafe { libloading::Library::new("opengl32.dll") },
+        }
+        .map_err(|e| {
             log::error!("{:?}", e);
             e
         })?;
