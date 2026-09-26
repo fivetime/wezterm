@@ -1136,7 +1136,9 @@ impl TermWindow {
     }
 
     fn do_paint_webgpu(&mut self) -> anyhow::Result<bool> {
-        self.webgpu.as_mut().unwrap().resize(self.dimensions);
+        let webgpu = self.webgpu.as_mut().unwrap();
+        webgpu.resize(self.dimensions);
+        webgpu.begin_paint();
         match self.do_paint_webgpu_impl() {
             Ok(ok) => Ok(ok),
             Err(err) => {

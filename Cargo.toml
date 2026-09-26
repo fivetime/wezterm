@@ -20,6 +20,7 @@ members = [
 ]
 resolver = "2"
 exclude = [
+  "deps/wgpu-hal",
   "termwiz/codegen",
   "wezterm-char-props/codegen",
 ]
@@ -284,3 +285,7 @@ zvariant = "4.0"
 # We use our own vendored cairo, which has minimal deps and should just
 # build via cargo.
 cairo-sys-rs = {path="deps/cairo", version="0.18.0"}
+# wgpu-hal 25.0.2 with one change: the Metal surface's
+# `present_with_transaction` is atomic, so that it can be switched through
+# `wgpu::Surface::as_hal` (macOS presents in step with window resizes)
+wgpu-hal = {path="deps/wgpu-hal", version="25.0.2"}

@@ -557,6 +557,7 @@ impl Window {
                 ime_state: ImeDisposition::None,
                 ime_last_event: None,
                 live_resizing: false,
+                fullscreen_transition: false,
                 ime_text: String::new(),
                 drag_press: None,
                 last_mouse: None,
@@ -1722,6 +1723,9 @@ struct Inner {
 
     /// Whether we're in live resize
     live_resizing: bool,
+
+    /// Between `windowWill{Enter,Exit}FullScreen:` and its end
+    fullscreen_transition: bool,
 
     ime_text: String,
 
@@ -3076,6 +3080,7 @@ impl WindowView {
     }
 
     extern "C" fn did_resize(this: &mut Object, _sel: Sel, _notification: id) {
+        let view = this as *mut Object;
         if let Some(this) = Self::get_this(this) {
             let inner = this.inner.borrow_mut();
 
@@ -3157,6 +3162,32 @@ impl WindowView {
                 window_state: screen_state | level_state,
                 live_resizing,
             });
+
+            // Chrome keeps the content in step with the frame while it
+            // changes: the transaction that resizes the window waits for a
+            // frame of the new size (`CATransactionCoordinator`), except in
+            // a full screen transition, which is laid out and painted after
+            // it ends (`NativeWidgetNSWindowBridge::ShouldWaitInPreCommit`).
+            // So paint now, within this transaction, whatever `max_fps`
+            // says, as Windows paints each step of a live resize.
+            if !inner.fullscreen_transition && width > 0. && height > 0. {
+                Self::paint_now(&mut inner);
+                unsafe {
+                    let () = msg_send![view, setNeedsDisplay: NO];
+                }
+            }
+        }
+    }
+
+    extern "C" fn will_change_full_screen(this: &mut Object, _sel: Sel, _notification: id) {
+        if let Some(this) = Self::get_this(this) {
+            this.inner.borrow_mut().fullscreen_transition = true;
+        }
+    }
+
+    extern "C" fn did_change_full_screen(this: &mut Object, _sel: Sel, _notification: id) {
+        if let Some(this) = Self::get_this(this) {
+            this.inner.borrow_mut().fullscreen_transition = false;
         }
     }
 
@@ -3232,37 +3263,40 @@ impl WindowView {
             if inner.paint_throttled {
                 inner.invalidated = true;
             } else {
-                // the next frame is due an interval after this one began,
-                // not after it ended (a frame then takes the interval, not
-                // the interval and the paint)
-                let began = std::time::Instant::now();
-                inner.events.dispatch(WindowEvent::NeedRepaint);
-                inner.invalidated = false;
-                inner.paint_throttled = true;
-
-                let window_id = inner.window_id;
-                let max_fps = inner.config.max_fps.max(1);
-                promise::spawn::spawn(async move {
-                    async_io::Timer::at(
-                        began + std::time::Duration::from_micros(1_000_000 / max_fps),
-                    )
-                    .await;
-                    Connection::with_window_inner(window_id, move |inner| {
-                        if let Some(window_view) = WindowView::get_this(unsafe { &**inner.view }) {
-                            let mut state = window_view.inner.borrow_mut();
-                            state.paint_throttled = false;
-                            if state.invalidated {
-                                unsafe {
-                                    let () = msg_send![*inner.view, setNeedsDisplay: YES];
-                                }
-                            }
-                        }
-                        Ok(())
-                    });
-                })
-                .detach();
+                Self::paint_now(&mut inner);
             }
         }
+    }
+
+    /// Paints, and holds the next paint until `max_fps` allows it
+    fn paint_now(inner: &mut Inner) {
+        // the next frame is due an interval after this one began,
+        // not after it ended (a frame then takes the interval, not
+        // the interval and the paint)
+        let began = std::time::Instant::now();
+        inner.events.dispatch(WindowEvent::NeedRepaint);
+        inner.invalidated = false;
+        inner.paint_throttled = true;
+
+        let window_id = inner.window_id;
+        let max_fps = inner.config.max_fps.max(1);
+        promise::spawn::spawn(async move {
+            async_io::Timer::at(began + std::time::Duration::from_micros(1_000_000 / max_fps))
+                .await;
+            Connection::with_window_inner(window_id, move |inner| {
+                if let Some(window_view) = WindowView::get_this(unsafe { &**inner.view }) {
+                    let mut state = window_view.inner.borrow_mut();
+                    state.paint_throttled = false;
+                    if state.invalidated {
+                        unsafe {
+                            let () = msg_send![*inner.view, setNeedsDisplay: YES];
+                        }
+                    }
+                }
+                Ok(())
+            });
+        })
+        .detach();
     }
 
     extern "C" fn dragging_entered(this: &mut Object, _: Sel, sender: id) -> BOOL {
@@ -3446,6 +3480,26 @@ impl WindowView {
                 sel!(windowDidResize:),
                 Self::did_resize as extern "C" fn(&mut Object, Sel, id),
             );
+            for sel in [
+                sel!(windowWillEnterFullScreen:),
+                sel!(windowWillExitFullScreen:),
+            ] {
+                cls.add_method(
+                    sel,
+                    Self::will_change_full_screen as extern "C" fn(&mut Object, Sel, id),
+                );
+            }
+            for sel in [
+                sel!(windowDidEnterFullScreen:),
+                sel!(windowDidExitFullScreen:),
+                sel!(windowDidFailToEnterFullScreen:),
+                sel!(windowDidFailToExitFullScreen:),
+            ] {
+                cls.add_method(
+                    sel,
+                    Self::did_change_full_screen as extern "C" fn(&mut Object, Sel, id),
+                );
+            }
             cls.add_method(
                 sel!(windowDidChangeScreen:),
                 Self::did_change_screen as extern "C" fn(&mut Object, Sel, id),

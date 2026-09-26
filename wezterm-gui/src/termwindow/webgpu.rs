@@ -39,6 +39,13 @@ pub struct WebGpuState {
     pub texture_nearest_sampler: wgpu::Sampler,
     pub texture_linear_sampler: wgpu::Sampler,
     pub handle: RawHandlePair,
+    /// Whether the surface presents with the Core Animation transaction
+    /// (see `present_with_transaction`)
+    #[cfg(target_os = "macos")]
+    transactional: std::cell::Cell<bool>,
+    /// Whether the size changed since the last paint
+    #[cfg(target_os = "macos")]
+    resized_since_paint: std::cell::Cell<bool>,
 }
 
 pub struct RawHandlePair {
@@ -539,6 +546,10 @@ impl WebGpuState {
             queue,
             config: RefCell::new(config),
             dimensions: RefCell::new(dimensions),
+            #[cfg(target_os = "macos")]
+            transactional: std::cell::Cell::new(false),
+            #[cfg(target_os = "macos")]
+            resized_since_paint: std::cell::Cell::new(false),
             render_pipeline,
             erase_pipeline,
             mask_pipeline,
@@ -593,10 +604,58 @@ impl WebGpuState {
         config.width = dims.pixel_width as u32;
         config.height = dims.pixel_height as u32;
         if config.width > 0 && config.height > 0 {
+            #[cfg(target_os = "macos")]
+            {
+                self.resized_since_paint.set(true);
+                self.present_with_transaction(true);
+            }
             // Avoid reconfiguring with a 0 sized surface, as webgpu will
             // panic in that case
             // <https://github.com/wezterm/wezterm/issues/2881>
             self.surface.configure(&self.device, &config);
+        }
+    }
+
+    /// Before a paint. A resize presents with the transaction; the first
+    /// paint after the size stopped changing presents on its own again.
+    pub fn begin_paint(&self) {
+        #[cfg(target_os = "macos")]
+        {
+            if self.transactional.get() && !self.resized_since_paint.get() {
+                self.present_with_transaction(false);
+                let config = self.config.borrow();
+                if config.width > 0 && config.height > 0 {
+                    self.surface.configure(&self.device, &config);
+                }
+            }
+            self.resized_since_paint.set(false);
+        }
+    }
+
+    /// Chrome keeps a window's content in step with its frame while the
+    /// frame changes (a live resize, zoom's animation): the transaction
+    /// that moves the frame waits until a frame of the new size is drawn,
+    /// up to 500 ms (`CATransactionCoordinator`'s pre-commit handler and
+    /// `NativeWidgetNSWindowBridge::ShouldWaitInPreCommit`, which asks only
+    /// while the drawn size differs from the window's). The window paints
+    /// while AppKit resizes it (`windowDidResize:`); a Metal layer shows
+    /// that frame in the same transaction only when it presents with it
+    /// (`presentsWithTransaction`), otherwise the frame and the content
+    /// appear apart. Takes effect at the next `configure`.
+    #[cfg(target_os = "macos")]
+    fn present_with_transaction(&self, on: bool) {
+        if self.transactional.replace(on) == on {
+            return;
+        }
+        unsafe {
+            self.surface
+                .as_hal::<wgpu::hal::api::Metal, _, _>(|surface| {
+                    if let Some(surface) = surface {
+                        surface
+                            .present_with_transaction
+                            .store(on, std::sync::atomic::Ordering::Relaxed);
+                    }
+                });
         }
     }
 }

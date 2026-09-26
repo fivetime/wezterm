@@ -207,6 +207,16 @@ on Linux (toggle-maximize, minimize, lower, menu, none), passed in as
 `titlebar_double_click`; macOS's `AppleActionOnDoubleClick` (Fill,
 Maximize, Minimize, None), read by the window; Windows' caption.
 
+Resizing on macOS (a live resize, zoom's animation): Chrome holds the
+transaction that changes the window's frame until a frame of the new size
+is drawn, up to 500 ms (CATransactionCoordinator's pre-commit handler,
+NativeWidgetNSWindowBridge::ShouldWaitInPreCommit, kUIPaintTimeout), not
+in a full screen transition. The window paints in `windowDidResize:`,
+unthrottled, and the Metal layer presents with the transaction while the
+size changes (`presentsWithTransaction`, through a vendored wgpu-hal
+whose Metal surface flag is atomic, `deps/wgpu-hal`), so the frame and
+the content change together.
+
 Text: `text.gtk_font_name_parse` (the desktop font at Chrome's
 whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
 (ceiled ascent, descent and cap height).
