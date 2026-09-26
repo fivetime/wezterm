@@ -677,22 +677,31 @@ impl super::TermWindow {
                             == WindowDecorations::INTEGRATED_BUTTONS | WindowDecorations::RESIZE
                             && self.last_mouse_click.as_ref().map(|c| c.streak) == Some(2)
                         {
-                            // A double-click on the strip's empty part
-                            // toggles maximized, as on a title bar: Chrome's
-                            // default caption action on Linux
-                            // (WindowEventFilterLinux::OnClickedCaption,
-                            // kToggleMaximize), what Windows itself does
-                            // with a caption (the strip is HTCAPTION there,
-                            // WM_NCLBUTTONDBLCLK never reaches this code),
-                            // and macOS's default "Maximize" double-click
-                            // action, the zoom `maximize` performs. No drag
-                            // begins from the second press.
+                            // A double-click on the strip's empty part does
+                            // what one on a title bar does, as Chrome's
+                            // caption: on Linux the desktop's preference
+                            // (GTK's gtk-titlebar-double-click, passed in as
+                            // `titlebar_double_click`; WindowEventFilterLinux
+                            // ::OnClickedCaption), on macOS the system's
+                            // (AppleActionOnDoubleClick, read by the window
+                            // itself); Windows' own caption handles it (the
+                            // strip is HTCAPTION there, WM_NCLBUTTONDBLCLK
+                            // never reaches this code). No drag begins from
+                            // the second press.
                             self.window_drag_position = None;
                             self.window_drag_started = false;
-                            if maximized {
-                                window.restore();
-                            } else {
-                                window.maximize();
+                            if !window.titlebar_double_click() {
+                                use config::TitlebarAction as Action;
+                                match self.config.titlebar_double_click {
+                                    Action::ToggleMaximize if maximized => window.restore(),
+                                    Action::ToggleMaximize => window.maximize(),
+                                    Action::Minimize => window.hide(),
+                                    Action::Lower => window.lower(),
+                                    Action::Menu => {
+                                        window.show_window_menu(event.coords, event.screen_coords)
+                                    }
+                                    Action::None => {}
+                                }
                             }
                             return;
                         }

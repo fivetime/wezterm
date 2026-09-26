@@ -918,6 +918,14 @@ impl WindowOps for Window {
         });
     }
 
+    fn titlebar_double_click(&self) -> bool {
+        Connection::with_window_inner(self.id, move |inner| {
+            inner.titlebar_double_click();
+            Ok(())
+        });
+        true
+    }
+
     fn set_resize_increments(&self, incr: ResizeIncrement) {
         Connection::with_window_inner(self.id, move |inner| {
             inner.set_resize_increments(incr);
@@ -1417,6 +1425,31 @@ impl WindowInner {
         if self.is_zoomed() {
             unsafe {
                 NSWindow::zoom_(*self.window, nil);
+            }
+        }
+    }
+
+    /// The title bar's double-click action as the user chose it in System
+    /// Settings (`AppleActionOnDoubleClick`), as Chrome performs it for its
+    /// draggable strip (NativeWidgetMacNSWindow sendEvent:): "Fill" where
+    /// the window has -_zoomFill:, unset or "Maximize" the zoom, "Minimize"
+    /// the Dock, anything else ("None") nothing.
+    fn titlebar_double_click(&mut self) {
+        unsafe {
+            let defaults: id = msg_send![class!(NSUserDefaults), standardUserDefaults];
+            let key = nsstring("AppleActionOnDoubleClick");
+            let action: id = msg_send![defaults, stringForKey: *key];
+            let action = (!action.is_null()).then(|| nsstring_to_str(action).to_string());
+            let window = *self.window;
+            let fills: BOOL = msg_send![window, respondsToSelector: sel!(_zoomFill:)];
+            match action.as_deref() {
+                Some("Fill") if fills == YES => {
+                    let () = msg_send![window, _zoomFill: nil];
+                }
+                Some("Fill") => {}
+                None | Some("Maximize") => NSWindow::zoom_(window, nil),
+                Some("Minimize") => NSWindow::miniaturize_(window, nil),
+                _ => {}
             }
         }
     }

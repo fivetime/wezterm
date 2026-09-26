@@ -2332,6 +2332,50 @@ impl XWindowInner {
         Ok(())
     }
 
+    /// Beneath the other windows (Chrome's X11Window::LowerWindow: the
+    /// window restacked below its siblings, the window manager deciding)
+    fn lower(&mut self) {
+        self.conn()
+            .send_request_no_reply_log(&xcb::x::ConfigureWindow {
+                window: self.window_id,
+                value_list: &[xcb::x::ConfigWindow::StackMode(xcb::x::StackMode::Below)],
+            });
+    }
+
+    /// The window manager's window menu at `screen` (GTK's
+    /// gdk_x11_window_show_window_menu: the pointer's implicit grab given
+    /// up, `_GTK_SHOW_WINDOW_MENU` sent to the root with the device, 0 for
+    /// the core pointer, and the root coordinates)
+    fn show_window_menu(&mut self, screen: ScreenPoint) {
+        let conn = self.conn();
+        let cookie = conn.conn().send_request(&xcb::x::InternAtom {
+            only_if_exists: false,
+            name: b"_GTK_SHOW_WINDOW_MENU",
+        });
+        let Ok(atom) = conn.conn().wait_for_reply(cookie).map(|r| r.atom()) else {
+            return;
+        };
+        if !conn.supported.borrow().contains(&atom) {
+            log::debug!("the window manager has no _GTK_SHOW_WINDOW_MENU");
+            return;
+        }
+        conn.send_request_no_reply_log(&xcb::x::UngrabPointer {
+            time: self.copy_and_paste.time,
+        });
+        conn.send_request_no_reply_log(&xcb::x::SendEvent {
+            propagate: false,
+            destination: xcb::x::SendEventDest::Window(conn.root),
+            event_mask: xcb::x::EventMask::SUBSTRUCTURE_REDIRECT
+                | xcb::x::EventMask::SUBSTRUCTURE_NOTIFY,
+            event: &xcb::x::ClientMessageEvent::new(
+                self.window_id,
+                atom,
+                xcb::x::ClientMessageData::Data32([0, screen.x as u32, screen.y as u32, 0, 0]),
+            ),
+        });
+        let _ = conn.flush();
+    }
+
     fn set_window_position(&mut self, coords: ScreenPoint) {
         if self.dragging {
             return;
@@ -2652,6 +2696,20 @@ impl WindowOps for XWindow {
     fn request_drag_resize(&self, edge: crate::ResizeEdge) {
         XConnection::with_window_inner(self.0, move |inner| {
             inner.request_drag_resize(edge)?;
+            Ok(())
+        });
+    }
+
+    fn lower(&self) {
+        XConnection::with_window_inner(self.0, move |inner| {
+            inner.lower();
+            Ok(())
+        });
+    }
+
+    fn show_window_menu(&self, _coords: Point, screen_coords: ScreenPoint) {
+        XConnection::with_window_inner(self.0, move |inner| {
+            inner.show_window_menu(screen_coords);
             Ok(())
         });
     }

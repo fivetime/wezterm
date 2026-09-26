@@ -483,6 +483,13 @@ impl WindowOps for WaylandWindow {
         });
     }
 
+    fn show_window_menu(&self, coords: Point, _screen_coords: ScreenPoint) {
+        WaylandConnection::with_window_inner(self.0, move |inner| {
+            inner.show_window_menu(coords);
+            Ok(())
+        });
+    }
+
     fn set_resize_increments(&self, incr: ResizeIncrement) {
         WaylandConnection::with_window_inner(self.0, move |inner| {
             inner.set_resize_increments(incr)
@@ -1348,6 +1355,23 @@ impl WaylandWindowInner {
             }
         };
         self.frame_action(&pointer, serial, FrameAction::Move);
+    }
+
+    /// The compositor's window menu at `coords` (the window's pixels):
+    /// xdg_toplevel.show_window_menu with the pointer's last serial
+    fn show_window_menu(&mut self, coords: Point) {
+        let conn = WaylandConnection::get().unwrap().wayland();
+        let (pointer, serial) = {
+            let state = conn.wayland_state.borrow();
+            let serial = *state.last_serial.borrow();
+            match state.pointer.as_ref() {
+                Some(pointer) => (pointer.pointer().clone(), serial),
+                None => return,
+            }
+        };
+        let x = self.pixels_to_surface(coords.x as i32);
+        let y = self.pixels_to_surface(coords.y as i32);
+        self.frame_action(&pointer, serial, FrameAction::ShowMenu(x, y));
     }
 
     fn set_inner_size(&mut self, width: usize, height: usize) {

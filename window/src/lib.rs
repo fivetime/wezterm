@@ -321,6 +321,24 @@ pub trait WindowOps {
     /// `edge`, the pointer being at the last `set_window_drag_position`.
     fn request_drag_resize(&self, _edge: ResizeEdge) {}
 
+    /// Puts the window beneath the others: a title bar's "lower" action
+    /// (X11; Chrome's WindowEventFilterLinux::LowerWindow).
+    fn lower(&self) {}
+
+    /// Shows the window manager's window menu at `coords` (the window's
+    /// pixels; `screen_coords` on the screen): a title bar's "menu"
+    /// action (Wayland's `xdg_toplevel.show_window_menu`, X11's
+    /// `_GTK_SHOW_WINDOW_MENU`).
+    fn show_window_menu(&self, _coords: Point, _screen_coords: ScreenPoint) {}
+
+    /// Performs the system's own action for a double-click on the title
+    /// bar where the window reads that preference itself (macOS's
+    /// `AppleActionOnDoubleClick`); `false` elsewhere, where the caller
+    /// acts on the configured one.
+    fn titlebar_double_click(&self) -> bool {
+        false
+    }
+
     /// Signal to the windowing system that the mouse is over
     /// a window dragging area.
     ///

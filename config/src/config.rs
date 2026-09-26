@@ -523,6 +523,14 @@ pub struct Config {
     #[dynamic(default)]
     pub tab_strip_style: TabStripStyle,
 
+    /// What a double-click on the tab strip's empty part (the window's
+    /// caption, with integrated buttons) does on Linux: the desktop's
+    /// title bar preference, GTK's `gtk-titlebar-double-click`, as Chrome
+    /// reads it. macOS follows its own `AppleActionOnDoubleClick` and
+    /// Windows its caption's.
+    #[dynamic(default)]
+    pub titlebar_double_click: TitlebarAction,
+
     /// Resting the pointer on a tab shows a card under it (its name, a
     /// line about it, the last lines of its screen; see the
     /// `tab-hover-card` event), as Chrome's hover cards.
@@ -2383,6 +2391,23 @@ fn default_edge_input() -> f64 {
 
 fn default_edge_slice() -> f64 {
     64.
+}
+
+/// A title bar click's action (GTK's `gtk-titlebar-double-click` values,
+/// ui::LinuxUi::WindowFrameAction).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic, Default)]
+pub enum TitlebarAction {
+    /// Maximize the window, or restore it (`toggle-maximize`)
+    #[default]
+    ToggleMaximize,
+    /// `minimize`
+    Minimize,
+    /// Put the window beneath the others (`lower`; X11)
+    Lower,
+    /// The window manager's window menu (`menu`)
+    Menu,
+    /// Nothing (`none`)
+    None,
 }
 
 /// How the fancy tab bar draws its tabs.

@@ -387,6 +387,23 @@ impl WindowOps for Window {
         }
     }
 
+    fn lower(&self) {
+        match self {
+            Self::X11(x) => x.lower(),
+            // (Wayland has no request to lower a window)
+            #[cfg(feature = "wayland")]
+            Self::Wayland(_) => {}
+        }
+    }
+
+    fn show_window_menu(&self, coords: crate::Point, screen_coords: ScreenPoint) {
+        match self {
+            Self::X11(x) => x.show_window_menu(coords, screen_coords),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(w) => w.show_window_menu(coords, screen_coords),
+        }
+    }
+
     fn set_window_drag_position(&self, coords: ScreenPoint) {
         match self {
             Self::X11(x) => x.set_window_drag_position(coords),
