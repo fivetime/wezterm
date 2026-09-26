@@ -729,9 +729,15 @@ impl WaylandWindowInner {
         let scale = SurfaceUserData::from_wl(self.surface())
             .surface_data
             .scale_factor();
+        // whole multiples of the buffer scale, as the EGL surface is
+        // (`enable_opengl`): before its first configure a window keeps the
+        // size its rows and columns made, odd ones included, and a strip
+        // along an odd side broke the protocol at scale 2 ("Buffer size
+        // (70x493) must be an integer multiple of the buffer_scale (2)",
+        // elementary OS)
         let content = (
-            self.dimensions.pixel_width as i32,
-            self.dimensions.pixel_height as i32,
+            self.dimensions.pixel_width as i32 / scale * scale,
+            self.dimensions.pixel_height as i32 / scale * scale,
         );
         let header: config::SrgbaTuple = {
             let focused = self.edge.as_ref().map(|e| e.focused).unwrap_or(true);
