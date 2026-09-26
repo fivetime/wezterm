@@ -130,6 +130,10 @@ pub(crate) struct XWindowInner {
     /// Maximized one way: the edge is the resize band alone.
     tiled: bool,
     edge_gc: Option<xcb::x::Gcontext>,
+    /// The margins as last painted, a pixmap per rectangle (x, y, width,
+    /// height) kept on the server: an Expose copies them back rather than
+    /// uploading them again
+    edge_pixmaps: Vec<(u16, u16, u16, u16, xcb::x::Pixmap)>,
     /// The cursor the GUI last asked for, and whether the pointer is on
     /// the margins, showing a resize cursor of ours instead.
     gui_cursor: Option<CursorIcon>,
@@ -155,6 +159,12 @@ impl Drop for XWindowInner {
                 conn.send_request_no_reply_log(&xcb::x::DestroyWindow {
                     window: self.window_id,
                 });
+                for (_, _, _, _, pixmap) in self.edge_pixmaps.drain(..) {
+                    conn.send_request_no_reply_log(&xcb::x::FreePixmap { pixmap });
+                }
+                if let Some(gc) = self.edge_gc.take() {
+                    conn.send_request_no_reply_log(&xcb::x::FreeGc { gc });
+                }
             }
         }
     }
@@ -529,26 +539,93 @@ impl XWindowInner {
                 gc
             }
         };
-        for (x, y, w, _h, data) in rects {
+        for (_, _, _, _, pixmap) in self.edge_pixmaps.drain(..) {
+            conn.send_request_unchecked(&xcb::x::FreePixmap { pixmap });
+        }
+        for (x, y, w, h, data) in rects {
+            if w == 0 || h == 0 {
+                continue;
+            }
+            // each rectangle goes to a pixmap of its own, then to the
+            // window: an Expose copies it again (`expose_edge`)
+            let pixmap = conn.generate_id();
+            conn.send_request_unchecked(&xcb::x::CreatePixmap {
+                depth: 32,
+                pid: pixmap,
+                drawable: xcb::x::Drawable::Window(self.window_id),
+                width: w,
+                height: h,
+            });
             // a few rows per request, well inside any request size limit
             let row = usize::from(w) * 4;
             let rows = (256 * 1024 / row.max(1)).max(1);
             for (i, chunk) in data.chunks(row * rows).enumerate() {
                 conn.send_request_unchecked(&xcb::x::PutImage {
                     format: xcb::x::ImageFormat::ZPixmap,
-                    drawable: xcb::x::Drawable::Window(self.window_id),
+                    drawable: xcb::x::Drawable::Pixmap(pixmap),
                     gc,
                     width: w,
                     height: (chunk.len() / row) as u16,
-                    dst_x: x as i16,
-                    dst_y: (usize::from(y) + i * rows) as i16,
+                    dst_x: 0,
+                    dst_y: (i * rows) as i16,
                     left_pad: 0,
                     depth: 32,
                     data: chunk,
                 });
             }
+            conn.send_request_unchecked(&xcb::x::CopyArea {
+                src_drawable: xcb::x::Drawable::Pixmap(pixmap),
+                dst_drawable: xcb::x::Drawable::Window(self.window_id),
+                gc,
+                src_x: 0,
+                src_y: 0,
+                dst_x: x as i16,
+                dst_y: y as i16,
+                width: w,
+                height: h,
+            });
+            self.edge_pixmaps.push((x, y, w, h, pixmap));
         }
         let _ = conn.flush();
+    }
+
+    /// Repaints the exposed part of the margins from the server's copy
+    /// of them (`edge_pixmaps`); `false` when there is none to copy from
+    /// yet. Uploading them again, as every Expose did, sent the whole
+    /// edge's pixels (the shadow's too) each time another window moved
+    /// off this one.
+    fn expose_edge(&mut self, x: u16, y: u16, width: u16, height: u16) -> bool {
+        let (Some(gc), false) = (self.edge_gc, self.edge_pixmaps.is_empty()) else {
+            return false;
+        };
+        if self.edge_painted.map(|(outer, ..)| outer) != Some(self.outer) {
+            return false;
+        }
+        let (ex0, ey0) = (u32::from(x), u32::from(y));
+        let (ex1, ey1) = (ex0 + u32::from(width), ey0 + u32::from(height));
+        let conn = self.conn();
+        for &(rx, ry, rw, rh, pixmap) in &self.edge_pixmaps {
+            let (rx0, ry0) = (u32::from(rx), u32::from(ry));
+            let (rx1, ry1) = (rx0 + u32::from(rw), ry0 + u32::from(rh));
+            let (x0, y0, x1, y1) = (ex0.max(rx0), ey0.max(ry0), ex1.min(rx1), ey1.min(ry1));
+            if x0 >= x1 || y0 >= y1 {
+                continue;
+            }
+            conn.send_request_unchecked(&xcb::x::CopyArea {
+                src_drawable: xcb::x::Drawable::Pixmap(pixmap),
+                dst_drawable: xcb::x::Drawable::Window(self.window_id),
+                gc,
+                src_x: (x0 - rx0) as i16,
+                src_y: (y0 - ry0) as i16,
+                dst_x: x0 as i16,
+                dst_y: y0 as i16,
+                width: (x1 - x0) as u16,
+                height: (y1 - y0) as u16,
+            });
+        }
+        let _ = conn.flush();
+        log::trace!("edge: exposed {x},{y} {width}x{height} copied from the server's copy");
+        true
     }
 
     /// Pointer coordinates in the X window to the content's; on the
@@ -1064,8 +1141,11 @@ impl XWindowInner {
         let conn = self.conn();
         match event {
             Event::X(xcb::x::Event::Expose(expose)) if expose.window() == self.window_id => {
-                // the margins, which are ours to paint
-                if expose.count() == 0 {
+                // the margins, which are ours to paint: copied back from
+                // the server's copy, or painted afresh without one
+                if !self.expose_edge(expose.x(), expose.y(), expose.width(), expose.height())
+                    && expose.count() == 0
+                {
                     self.edge_painted = None;
                     self.paint_edge(self.dpi);
                 }
@@ -1951,6 +2031,7 @@ impl XWindow {
                 fitted: None,
                 tiled: false,
                 edge_gc: None,
+                edge_pixmaps: vec![],
                 gui_cursor: None,
                 on_edge: false,
             }))
