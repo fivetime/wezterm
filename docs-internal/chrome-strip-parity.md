@@ -70,7 +70,11 @@ narrower than their minimums: a tab past the strip's trailing edge is
 hidden whole, as is one before the active tab that would be past it were
 it the active one — `TabContainerImpl::ShouldTabBeVisible`; Chrome has no
 tab strip scrolling in this tree; the new-tab button then sits 6 past the
-strip's own edge).
+strip's own edge). Checked against Chrome itself on 2026-09-26
+(EndeavourOS, a throwaway profile, 100 blank tabs, then three more opened
+at the end, each active): the active tab past the edge is hidden, and the
+new-tab button stays at the strip's edge with a gap before it of up to a
+tab's width, as here.
 
 Contents: `favicon.size` 16 at the contents' corner (rows 12..28);
 `tab.pre_title_padding` 8; `title.bounds` (8 before the close icon);
