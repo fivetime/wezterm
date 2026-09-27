@@ -974,6 +974,38 @@ impl WindowOps for Window {
         clipboard_win::set_clipboard_string(&text).ok();
     }
 
+    fn show_popup(
+        &self,
+        at: Point,
+        image: crate::PopupImage,
+        events: Box<dyn FnMut(crate::PopupEvent) + Send>,
+    ) -> bool {
+        // (not with the window's state borrowed: the system calls the
+        // window's procedure while the popup is made and shown)
+        let hwnd = self.0;
+        promise::spawn::spawn_into_main_thread(async move {
+            super::popup::show(hwnd.0, at, image, events);
+        })
+        .detach();
+        true
+    }
+
+    fn update_popup(&self, image: crate::PopupImage) {
+        let hwnd = self.0;
+        promise::spawn::spawn_into_main_thread(async move {
+            super::popup::update(hwnd.0, image);
+        })
+        .detach();
+    }
+
+    fn close_popup(&self) {
+        let hwnd = self.0;
+        promise::spawn::spawn_into_main_thread(async move {
+            super::popup::close(hwnd.0);
+        })
+        .detach();
+    }
+
     fn set_window_drag_position(&self, coords: ScreenPoint) {
         Connection::with_window_inner(self.0, move |inner| {
             inner.window_drag_position = Some(coords);

@@ -230,15 +230,18 @@ icons, which are nerdfont glyphs. Elsewhere Chrome draws its own menu in
 a window of its own (MenuHost), and so does `PopupMenu` where the window
 has popups (`WindowOps::show_popup`; X11: an override-redirect window
 with the pointer grabbed; Wayland: an xdg_popup, its grab asked with the
-press that led to it, placed by its positioner's flip and slide):
+press that led to it, placed by its positioner's flip and slide;
+Windows: what Chrome's TYPE_MENU widget is, a WS_POPUP window the
+window owns, WS_EX_TOOLWINDOW, TOPMOST and NOACTIVATE, its picture given
+with UpdateLayeredWindow as LayeredWindowUpdaterImpl does, shown with
+SW_SHOWNOACTIVATE, the mouse captured, within the monitor's work area):
 painted as a picture with Chrome's numbers (`menuimage.rs`: MenuConfig's
 margins and paddings, kMenuRadius 12, the elevation 12 shadow, given
 three sigmas of room where Chrome's half a blur left a line at the
 picture's edge; square and without a shadow where X11 has no compositing
 manager), at the right click's point or on its other side where the
-screen ends. Where the window has none (Windows: to come) the menu is
-still drawn within the window, cut off where the window is smaller than
-the menu.
+screen ends. A press beside the menu closes it and is not passed on
+(Chrome on Windows gives it to what is under it, RepostEventAndCancel).
 
 Text: `text.gtk_font_name_parse` (the desktop font at Chrome's
 whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`

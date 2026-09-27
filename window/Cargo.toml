@@ -61,6 +61,7 @@ winapi = { workspace=true, features = [
     "synchapi",
     "sysinfoapi",
     "winerror",
+    "wingdi",
     "winuser",
 ]}
 windows = { workspace=true, features = [
