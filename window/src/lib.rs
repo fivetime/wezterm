@@ -268,6 +268,9 @@ pub struct GraphicsDriversLostContext {}
 /// One line of a menu the system shows (`WindowOps::show_native_menu`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct NativeMenuItem {
+    /// The keys that do the same, as the system's menu shows them: the
+    /// modifiers' signs (⌃⌥⇧⌘) and a key, `⌘C`.
+    pub shortcut: Option<String>,
     pub label: String,
     /// Shown dimmed and not chosen when false.
     pub enabled: bool,
@@ -373,6 +376,14 @@ pub trait WindowOps {
         _coords: Point,
         _chosen: Box<dyn FnOnce(Option<usize>) + Send>,
     ) -> bool {
+        false
+    }
+
+    /// Shows the system's print panel for `text`, with its preview, from
+    /// which the person prints it or not: where the system has one for
+    /// any window (macOS: NSPrintOperation, as a sheet of the window).
+    /// `false`, and nothing shown, where it has none.
+    fn print_text(&self, _text: String) -> bool {
         false
     }
 

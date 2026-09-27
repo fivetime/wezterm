@@ -504,6 +504,11 @@ pub struct PopupMenuEntry {
     pub separator: bool,
     #[dynamic(default)]
     pub header: bool,
+    /// The keys that do the same, shown after the label: what is to be
+    /// read, as `Ctrl+Ins`; on macOS its modifiers' signs and a key, as
+    /// `⌘C`, for the system's menu to show as its own.
+    #[dynamic(default)]
+    pub shortcut: Option<String>,
 }
 
 /// A menu that pops up where the mouse is, drawn by the GUI over the
@@ -685,6 +690,9 @@ pub enum KeyAssignment {
     InputSelector(InputSelector),
     Confirmation(Confirmation),
     PopupMenu(PopupMenu),
+    /// Selects everything the pane holds: its scrollback and its screen,
+    /// to the last line with something on it.
+    SelectAll,
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 

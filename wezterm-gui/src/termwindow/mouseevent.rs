@@ -134,6 +134,12 @@ impl super::TermWindow {
         };
 
         self.current_mouse_event.replace(event.clone());
+        // where a menu the press leads to pops up (X11 has the pointer
+        // leave the window for the press's grab, and nothing says where
+        // it is by the time the menu is asked for)
+        if let WMEK::Press(MousePress::Right) = event.kind {
+            self.popup_anchor = Some((event.coords, Instant::now()));
+        }
 
         // a tab under the pointer brings up its card, after a moment
         let hovered_tab = match self.resolve_ui_item(&event).map(|i| i.item_type) {
@@ -749,7 +755,6 @@ impl super::TermWindow {
             },
             WMEK::Press(MousePress::Right) => match item {
                 TabBarItem::Tab { tab_idx, .. } => {
-                    self.popup_anchor = Some((event.coords, Instant::now()));
                     self.do_tab_right_click(tab_idx);
                 }
                 TabBarItem::NewTabButton { .. } => {

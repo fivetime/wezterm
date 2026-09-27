@@ -311,6 +311,39 @@ impl UserData for GuiWin {
                 Ok(())
             },
         );
+        // What the clipboard ("Clipboard", or "PrimarySelection") holds
+        // as text, "" when it holds none: for a menu to say whether
+        // there is anything to paste, and for a paste of something made
+        // of it.
+        methods.add_async_method(
+            "get_clipboard_text",
+            |_, this, clipboard: Option<String>| async move {
+                // named as `PasteFrom` names them
+                let clipboard = match clipboard.as_deref() {
+                    Some("PrimarySelection") => window::Clipboard::PrimarySelection,
+                    _ => window::Clipboard::Clipboard,
+                };
+                Ok(this
+                    .window
+                    .get_clipboard(clipboard)
+                    .await
+                    .unwrap_or_default())
+            },
+        );
+        // The system's print panel for the text, with its preview (see
+        // `WindowOps::print_text`); false where the system has none.
+        methods.add_method("print_text", |_, this, text: String| {
+            Ok(this.window.print_text(text))
+        });
+        // The link the pointer is on, or nil.
+        methods.add_async_method("hovered_link", |_, this, _: ()| async move {
+            let (tx, rx) = smol::channel::bounded(1);
+            this.window
+                .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+                    tx.try_send(term_window.hovered_link()).ok();
+                })));
+            rx.recv().await.map_err(mlua::Error::external)
+        });
         methods.add_async_method(
             "get_selection_escapes_for_pane",
             |_, this, pane: UserDataRef<MuxPane>| async move {

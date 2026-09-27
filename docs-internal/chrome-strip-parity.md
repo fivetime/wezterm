@@ -243,6 +243,26 @@ manager), at the right click's point or on its other side where the
 screen ends. A press beside the menu closes it and is not passed on
 (Chrome on Windows gives it to what is under it, RepostEventAndCancel).
 
+An item's keys (`shortcut`, Chrome's minor text: an accelerator) end
+where the labels' room ends, right-aligned in a column as wide as the
+widest, `item_horizontal_padding` 8 after the widest label
+(SubmenuView::GetPreferredSize, MenuItemView::PaintMinorIconAndText), in
+the secondary text's colour (kColorMenuItemForegroundSecondary is
+kColorSysOnSurfaceSubtle: the reference palette's neutral 80 where the
+text is neutral 90, 30 where it is 10, which is 0.84 of the way from the
+menu's background to its text); on macOS the system's menu shows them as
+its own key equivalents, from the modifiers' signs and a key (`⌘C`).
+
+What a menu of the pane needs besides, for a configuration to make one
+(NativeTerm's, as SecureCRT's): a right press anywhere says where the
+menu goes; `SelectAll` (the scrollback and the screen, to the last line
+with something on it); `window:get_clipboard_text()` (is there anything
+to paste; a paste of something made of it), `window:hovered_link()`,
+and `window:print_text(text)`, the system's print panel with its preview
+as a sheet of the window (macOS: NSPrintOperation on a text view as
+wide as the paper within its margins; false elsewhere, where no such
+panel is there for any window).
+
 Text: `text.gtk_font_name_parse` (the desktop font at Chrome's
 whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
 (ceiled ascent, descent and cap height).

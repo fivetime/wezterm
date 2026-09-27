@@ -8,6 +8,14 @@
 //! - the label after the icons' column, 16 wide, and
 //!   DISTANCE_RELATED_LABEL_HORIZONTAL 12 (layout_provider.cc), where an
 //!   item has an icon
+//! - the keys that do the same (an accelerator, Chrome's minor text)
+//!   end where the labels' room ends, in a column as wide as the widest
+//!   of them and `item_horizontal_padding` 8 after the widest label
+//!   (SubmenuView::GetPreferredSize, MenuItemView::PaintMinorIconAndText),
+//!   in the secondary text's colour (kColorMenuItemForegroundSecondary,
+//!   kColorSysOnSurfaceSubtle: the reference palette's neutral 80 where
+//!   the text is neutral 90, 30 where it is 10, 0.84 of the way from the
+//!   background to the text)
 //! - a separator: `separator_height` 17, its line `separator_thickness`
 //!   1 in its middle, from edge to edge
 //! - the corners' radius, ShapeContextTokens::kMenuRadius: 12
@@ -38,6 +46,9 @@ const ITEM_VERTICAL_MARGIN: f32 = 6.;
 const ITEM_HORIZONTAL_PADDING: f32 = 12.;
 const ICON_SIZE: f32 = 16.;
 const ICON_LABEL_SPACING: f32 = 12.;
+const LABEL_MINOR_SPACING: f32 = 8.;
+/// The secondary text's colour, from the background's to the text's.
+const MINOR_SHADE: f32 = 0.84;
 const SEPARATOR_HEIGHT: f32 = 17.;
 const SEPARATOR_THICKNESS: f32 = 1.;
 const CORNER_RADIUS: f32 = 12.;
@@ -80,6 +91,9 @@ enum Row {
         dimmed: bool,
         icon: Vec<Glyph>,
         label: Vec<Glyph>,
+        /// The keys that do the same, and how wide they are.
+        minor: Vec<Glyph>,
+        minor_width: i32,
     },
 }
 
@@ -95,6 +109,8 @@ pub struct MenuLayout {
     body: (usize, usize, usize, usize),
     label_x: i32,
     icon_x: i32,
+    /// Where the keys end, from the menu's left.
+    minor_end: i32,
     line_height: i32,
 }
 
@@ -204,6 +220,7 @@ impl MenuLayout {
         let mut rows = vec![];
         let mut y = margin.1 + border_y;
         let mut widest = 0;
+        let mut widest_minor = 0;
         for (idx, entry) in entries.iter().enumerate() {
             if entry.separator {
                 let height = px(SEPARATOR_HEIGHT);
@@ -213,6 +230,9 @@ impl MenuLayout {
             }
             let (label, width) = shape(font, &entry.label, &on_fonts);
             widest = widest.max(width);
+            let (minor, minor_width) =
+                shape(font, entry.shortcut.as_deref().unwrap_or(""), &on_fonts);
+            widest_minor = widest_minor.max(minor_width);
             let icon = entry
                 .icon
                 .as_deref()
@@ -244,13 +264,20 @@ impl MenuLayout {
                     dimmed: !entry.enabled || entry.header,
                     icon,
                     label,
+                    minor,
+                    minor_width,
                 },
                 y,
                 y + height,
             ));
             y += height;
         }
-        let body_width = label_x + widest + px(ITEM_HORIZONTAL_PADDING);
+        let minor_end = if widest_minor > 0 {
+            label_x + widest + px(LABEL_MINOR_SPACING) + widest_minor
+        } else {
+            label_x + widest
+        };
+        let body_width = minor_end + px(ITEM_HORIZONTAL_PADDING);
         let body_height = y + border_y - margin.1;
         Self {
             rows,
@@ -269,6 +296,7 @@ impl MenuLayout {
             ),
             label_x,
             icon_x,
+            minor_end,
             line_height,
         }
     }
@@ -355,6 +383,8 @@ impl MenuLayout {
                     dimmed,
                     icon,
                     label,
+                    minor,
+                    minor_width,
                     ..
                 } => {
                     if selected == Some(*idx) {
@@ -371,6 +401,15 @@ impl MenuLayout {
                     }
                     for g in label {
                         canvas.glyph(bx + self.label_x + g.x, top + g.y, &g.glyph, color);
+                    }
+                    let color = if *dimmed {
+                        color
+                    } else {
+                        self.colors.mix(MINOR_SHADE)
+                    };
+                    let left = bx + self.minor_end - minor_width;
+                    for g in minor {
+                        canvas.glyph(left + g.x, top + g.y, &g.glyph, color);
                     }
                 }
             }

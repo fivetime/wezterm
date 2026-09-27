@@ -62,6 +62,31 @@ impl super::TermWindow {
         result
     }
 
+    /// Everything the pane holds is selected: from the scrollback's
+    /// first line to the last line with something on it (the screen's
+    /// empty lines below it are not what anyone means to copy).
+    pub fn select_all(&mut self, pane: &Arc<dyn Pane>) {
+        let dims = pane.get_dimensions();
+        let first = dims.scrollback_top;
+        let end = dims.physical_top + dims.viewport_rows as StableRowIndex;
+        let (top, lines) = pane.get_lines(first..end);
+        let last = lines
+            .iter()
+            .rposition(|line| !line.is_whitespace())
+            .map(|idx| top + idx as StableRowIndex);
+        {
+            let mut selection = self.selection(pane.pane_id());
+            selection.seqno = pane.get_current_seqno();
+            selection.rectangular = false;
+            selection.origin = None;
+            selection.range = last.map(|last| SelectionRange {
+                start: SelectionCoordinate::x_y(0, top),
+                end: SelectionCoordinate::x_y(dims.cols.saturating_sub(1), last),
+            });
+        }
+        self.window.as_ref().unwrap().invalidate();
+    }
+
     /// Returns the selection text only
     pub fn selection_text(&self, pane: &Arc<dyn Pane>) -> String {
         let mut s = String::new();

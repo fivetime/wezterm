@@ -935,6 +935,20 @@ impl WindowOps for Window {
         true
     }
 
+    fn print_text(&self, text: String) -> bool {
+        let window_id = self.id;
+        let window = self.ns_window as usize;
+        // (as the menu: the panel's sheet calls the window's delegate,
+        // and no borrow of the window may be held then)
+        promise::spawn::spawn_into_main_thread(async move {
+            if Connection::get().unwrap().window_by_id(window_id).is_some() {
+                unsafe { print_panel(window as id, &text) };
+            }
+        })
+        .detach();
+        true
+    }
+
     fn set_text_cursor_position(&self, cursor: Rect) {
         Connection::with_window_inner(self.id, move |inner| {
             inner.set_text_cursor_position(cursor);
@@ -2063,6 +2077,82 @@ fn popup_target_class() -> &'static Class {
     })
 }
 
+/// The system's print panel for `text`, as a sheet of `window`: the text
+/// in a text view as wide as the paper within its margins (the lines
+/// wrap there, the pages follow), in the fixed pitch font the person has
+/// chosen for the system, black on the paper whatever the window's
+/// appearance is. The panel shows the pages; nothing is printed unless
+/// the person says so there.
+unsafe fn print_panel(window: id, text: &str) {
+    let shared: id = msg_send![class!(NSPrintInfo), sharedPrintInfo];
+    let info: id = msg_send![shared, copy];
+    let info = StrongPtr::new(info);
+    let paper: NSSize = msg_send![*info, paperSize];
+    let (left, right): (CGFloat, CGFloat) =
+        (msg_send![*info, leftMargin], msg_send![*info, rightMargin]);
+    let (top, bottom): (CGFloat, CGFloat) =
+        (msg_send![*info, topMargin], msg_send![*info, bottomMargin]);
+    // NSAutoPagination down the pages, NSFitPagination across
+    let () = msg_send![*info, setVerticalPagination: 0 as NSUInteger];
+    let () = msg_send![*info, setHorizontalPagination: 1 as NSUInteger];
+    let () = msg_send![*info, setHorizontallyCentered: NO];
+    let () = msg_send![*info, setVerticallyCentered: NO];
+
+    let frame = NSRect::new(
+        NSPoint::new(0., 0.),
+        NSSize::new(paper.width - left - right, paper.height - top - bottom),
+    );
+    let view: id = msg_send![class!(NSTextView), alloc];
+    let view = StrongPtr::new(msg_send![view, initWithFrame: frame]);
+    let font: id = msg_send![class!(NSFont), userFixedPitchFontOfSize: 10.0 as CGFloat];
+    let black: id = msg_send![class!(NSColor), blackColor];
+    let () = msg_send![*view, setString: *nsstring(text)];
+    if !font.is_null() {
+        let () = msg_send![*view, setFont: font];
+    }
+    let () = msg_send![*view, setTextColor: black];
+    let () = msg_send![*view, setDrawsBackground: NO];
+    let () = msg_send![*view, sizeToFit];
+
+    let operation: id =
+        msg_send![class!(NSPrintOperation), printOperationWithView: *view printInfo: *info];
+    let () = msg_send![operation, setShowsPrintPanel: YES];
+    let () = msg_send![operation, setShowsProgressPanel: YES];
+    let () = msg_send![operation,
+        runOperationModalForWindow: window
+        delegate: nil
+        didRunSelector: std::ptr::null::<std::ffi::c_void>()
+        contextInfo: std::ptr::null::<std::ffi::c_void>()];
+}
+
+/// A menu item's key equivalent and its modifier mask from what a
+/// shortcut reads as with the system's signs, `⇧⌘C`: the signs, then one
+/// key. `None` for anything else (the item then shows no keys).
+fn key_equivalent(shortcut: &str) -> Option<(String, NSUInteger)> {
+    // NSEventModifierFlagShift, Control, Option, Command
+    const SHIFT: NSUInteger = 1 << 17;
+    const CONTROL: NSUInteger = 1 << 18;
+    const OPTION: NSUInteger = 1 << 19;
+    const COMMAND: NSUInteger = 1 << 20;
+    let mut modifiers = 0;
+    let mut chars = shortcut.chars().peekable();
+    while let Some(c) = chars.peek() {
+        modifiers |= match c {
+            '⇧' => SHIFT,
+            '⌃' => CONTROL,
+            '⌥' => OPTION,
+            '⌘' => COMMAND,
+            _ => break,
+        };
+        chars.next();
+    }
+    let key = chars.next()?;
+    if chars.next().is_some() || modifiers == 0 {
+        return None;
+    }
+    Some((key.to_lowercase().collect(), modifiers))
+}
+
 /// The system's menu of `items` at `coords` (the view's pixels), as
 /// Chrome's context menus on macOS (MenuRunnerImplMac: an NSMenu, popped
 /// up with popUpMenuPositioningItem:atLocation:inView:). Returns when the
@@ -2091,11 +2181,19 @@ unsafe fn popup_menu(
         } else if entry.header && headers == YES {
             msg_send![class!(NSMenuItem), sectionHeaderWithTitle: *nsstring(&entry.label)]
         } else {
+            let (key, modifiers) = entry
+                .shortcut
+                .as_deref()
+                .and_then(key_equivalent)
+                .unwrap_or_default();
             let item: id = msg_send![class!(NSMenuItem), alloc];
             let item: id = msg_send![item,
                 initWithTitle: *nsstring(&entry.label)
                 action: sel!(weztermPopupChosen:)
-                keyEquivalent: *nsstring("")];
+                keyEquivalent: *nsstring(&key)];
+            if !key.is_empty() {
+                let () = msg_send![item, setKeyEquivalentModifierMask: modifiers];
+            }
             let () = msg_send![item, setTarget: *target];
             let () = msg_send![item, setTag: idx as NSInteger];
             let () = msg_send![item, setEnabled: to_yes_no(entry.enabled && !entry.header)];
@@ -3800,5 +3898,24 @@ impl WindowView {
         }
 
         cls.register()
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::key_equivalent;
+
+    #[test]
+    fn a_shortcut_as_a_key_equivalent() {
+        assert_eq!(key_equivalent("⌘C"), Some(("c".to_string(), 1 << 20)));
+        assert_eq!(
+            key_equivalent("⇧⌘V"),
+            Some(("v".to_string(), 1 << 17 | 1 << 20))
+        );
+        // what the system's menu cannot show as its own
+        assert_eq!(key_equivalent("Ctrl+Ins"), None);
+        assert_eq!(key_equivalent("C"), None);
+        assert_eq!(key_equivalent("⌘"), None);
+        assert_eq!(key_equivalent(""), None);
     }
 }

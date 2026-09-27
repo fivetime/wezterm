@@ -2454,6 +2454,7 @@ impl TermWindow {
             .choices
             .iter()
             .map(|c| ::window::NativeMenuItem {
+                shortcut: c.shortcut.clone(),
                 label: c.label.clone(),
                 enabled: c.enabled,
                 separator: c.separator,
@@ -3352,8 +3353,16 @@ impl TermWindow {
             InputSelector(args) => self.show_input_selector(args),
             Confirmation(args) => self.show_confirmation(args),
             PopupMenu(args) => self.show_popup_menu(pane, args),
+            SelectAll => self.select_all(pane),
         };
         Ok(PerformAssignmentResult::Handled)
+    }
+
+    /// The link the pointer is on.
+    pub fn hovered_link(&self) -> Option<String> {
+        self.current_highlight
+            .as_ref()
+            .map(|link| link.uri().to_string())
     }
 
     fn do_open_link_at_mouse_cursor(&self, pane: &Arc<dyn Pane>) {

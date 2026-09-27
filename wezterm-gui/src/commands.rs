@@ -814,6 +814,14 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &[],
             icon: None,
         },
+        SelectAll => CommandDef {
+            brief: "Select All".into(),
+            doc: "Selects the scrollback and the screen of the current pane".into(),
+            keys: vec![],
+            args: &[ArgType::ActivePane],
+            menubar: &["Edit"],
+            icon: Some("md_select_all"),
+        },
         PopupMenu(_) => CommandDef {
             brief: "Pop up a menu".into(),
             doc: "Shows a menu where the mouse is and waits for a choice".into(),
