@@ -335,6 +335,38 @@ impl UserData for GuiWin {
         methods.add_method("print_text", |_, this, text: String| {
             Ok(this.window.print_text(text))
         });
+        // Finds the next match in the pane, selects it and brings it
+        // into view (see `termwindow::find`): { text, match_case,
+        // whole_word, wrap, up } gives { count, position }.
+        methods.add_async_method(
+            "find",
+            |_, this, (pane, args): (UserDataRef<MuxPane>, crate::termwindow::find::FindArgs)| async move {
+                use crate::termwindow::find::{pattern, FindResult};
+                let pane_id = pane.0;
+                if args.text.is_empty() {
+                    return Ok(FindResult::default());
+                }
+                let mux_pane = Mux::try_get()
+                    .and_then(|mux| mux.get_pane(pane_id))
+                    .ok_or_else(|| anyhow::anyhow!("pane id {pane_id} is not valid"))
+                    .map_err(luaerr)?;
+                let dims = mux_pane.get_dimensions();
+                let range = dims.scrollback_top
+                    ..dims.scrollback_top + dims.scrollback_rows as wezterm_term::StableRowIndex;
+                let mut results = mux_pane
+                    .search(pattern(&args), range, None)
+                    .await
+                    .map_err(luaerr)?;
+                results.sort();
+                let (tx, rx) = smol::channel::bounded(1);
+                this.window
+                    .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+                        tx.try_send(term_window.show_found(pane_id, &results, &args))
+                            .ok();
+                    })));
+                rx.recv().await.map_err(mlua::Error::external)
+            },
+        );
         // The link the pointer is on, or nil.
         methods.add_async_method("hovered_link", |_, this, _: ()| async move {
             let (tx, rx) = smol::channel::bounded(1);

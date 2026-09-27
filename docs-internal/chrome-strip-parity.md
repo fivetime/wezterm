@@ -273,6 +273,17 @@ as a sheet of the window (macOS: NSPrintOperation on a text view as
 wide as the paper within its margins; false elsewhere, where no such
 panel is there for any window).
 
+Find, for a dialog to drive (`termwindow/find.rs`, SecureCRT's "Find"
+as NativeTerm shows it): `window:find(pane, { text, match_case,
+whole_word, wrap, up })` finds the next match from the one shown, or
+from what the pane shows (up: the last that begins above the viewport's
+end; down: the first at its start or below), selects it and brings it
+into view, in the viewport's middle, and says `{ count, position }`
+(position 0: none, or no more that way without `wrap`). Whole words
+are a regular expression of the text taken literally between `\b`.
+The pane enters no mode and no keys are taken, as WezTerm's search
+overlay does: the match is the pane's selection.
+
 Text: `text.gtk_font_name_parse` (the desktop font at Chrome's
 whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
 (ceiled ascent, descent and cap height).

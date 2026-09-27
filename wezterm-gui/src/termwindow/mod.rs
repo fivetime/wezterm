@@ -73,6 +73,7 @@ pub mod background;
 pub mod box_model;
 pub mod charselect;
 pub mod clipboard;
+pub mod find;
 pub mod keyevent;
 pub mod menuimage;
 pub mod modal;
