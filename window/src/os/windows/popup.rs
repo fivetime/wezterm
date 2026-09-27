@@ -5,7 +5,9 @@
 //! to the system as a layered window's (LayeredWindowUpdaterImpl::Draw);
 //! shown without being activated (ShowInactive), the mouse captured for
 //! it while it shows (MenuHost::ShowMenuHost), so that a press beside it
-//! is heard of. The keys stay the application's window's.
+//! is heard of; such a press closes it and is given to the window of this
+//! thread's under it (MenuController::RepostEventAndCancel). The keys
+//! stay the application's window's.
 
 use super::wide_string;
 use crate::os::place_popup;
@@ -87,6 +89,40 @@ unsafe fn dismiss(hwnd: HWND) {
         (popup.events)(PopupEvent::Dismissed);
         destroy(&popup);
     }
+}
+
+/// The press `msg` at the screen's point, which closed the popup of
+/// `owner`, to the window under it (Chrome's RepostEventImpl): posted to
+/// that window when it is one of the owner's thread (another thread's
+/// hears of the press from the system, capture or not), for its client
+/// area as it came, for the rest of it as the press there that it is.
+unsafe fn repost(owner: HWND, msg: UINT, wparam: WPARAM, screen: POINT) {
+    let target = WindowFromPoint(screen);
+    if target.is_null()
+        || owner.is_null()
+        || GetWindowThreadProcessId(target, null_mut())
+            != GetWindowThreadProcessId(owner, null_mut())
+    {
+        return;
+    }
+    let coords = |x: i32, y: i32| ((y as u16 as u32) << 16 | (x as u16 as u32)) as LPARAM;
+    let hit = SendMessageW(target, WM_NCHITTEST, 0, coords(screen.x, screen.y));
+    if hit == HTCLIENT as LRESULT {
+        let mut client = screen;
+        ScreenToClient(target, &mut client);
+        PostMessageW(target, msg, wparam, coords(client.x, client.y));
+        return;
+    }
+    let msg = match msg {
+        WM_LBUTTONDOWN => WM_NCLBUTTONDOWN,
+        WM_RBUTTONDOWN => WM_NCRBUTTONDOWN,
+        WM_MBUTTONDOWN => WM_NCMBUTTONDOWN,
+        WM_LBUTTONDBLCLK => WM_NCLBUTTONDBLCLK,
+        WM_RBUTTONDBLCLK => WM_NCRBUTTONDBLCLK,
+        WM_MBUTTONDBLCLK => WM_NCMBUTTONDBLCLK,
+        _ => return,
+    };
+    PostMessageW(target, msg, hit as WPARAM, coords(screen.x, screen.y));
 }
 
 /// The picture, to the system (Chrome's LayeredWindowUpdaterImpl::Draw:
@@ -317,7 +353,7 @@ fn set_inside(hwnd: HWND, inside: bool) -> bool {
     })
 }
 
-unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, _wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     let press = match msg {
         WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_LBUTTONUP => Some(MousePress::Left),
         WM_RBUTTONDOWN | WM_RBUTTONDBLCLK | WM_RBUTTONUP => Some(MousePress::Right),
@@ -344,8 +380,17 @@ unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, _wparam: WPARAM, lparam: LPARAM) ->
             if within(hwnd, at) {
                 send(hwnd, PopupEvent::Press(at.0, at.1, press?));
             } else {
-                // a press beside it, on the application's windows
+                // a press beside it: it goes, and the press is the
+                // window's under it (found while the popup is there to
+                // say where the press was)
+                let mut screen = POINT {
+                    x: at.0 as i32,
+                    y: at.1 as i32,
+                };
+                ClientToScreen(hwnd, &mut screen);
+                let owner = GetWindow(hwnd, GW_OWNER);
                 dismiss(hwnd);
+                repost(owner, msg, wparam, screen);
             }
             Some(0)
         }

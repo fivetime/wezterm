@@ -9,7 +9,10 @@
 //! The mouse: it takes the window's mouse events while it is open
 //! (`Modal::window_mouse_event`); the item under the pointer is
 //! highlighted, a click on one chooses it, and a press anywhere outside
-//! dismisses the menu. A right button still held from the click that
+//! dismisses the menu and is the window's own then, as Chrome's menus
+//! give it to what is under it (MenuController::RepostEventAndCancel): a
+//! right press on a tab while the pane's menu is up brings up the tab's
+//! at once. A right button still held from the click that
 //! opened the menu chooses where it is released only after the pointer
 //! moved, as desktop menus do. The keyboard: Up and Down move, Enter
 //! chooses, Escape dismisses.
@@ -390,9 +393,11 @@ impl Modal for PopupMenu {
     fn window_mouse_event(&self, event: &WindowMouseEvent, term_window: &mut TermWindow) -> bool {
         if self.popup.borrow().is_some() {
             // the menu is not in this window: a press here is one
-            // outside the menu
+            // outside the menu, which goes, and the press is the
+            // window's
             if let WMEK::Press(_) = &event.kind {
                 self.finish(term_window, None);
+                return false;
             }
             return true;
         }
@@ -426,6 +431,7 @@ impl Modal for PopupMenu {
                     self.pressed.set(item);
                 } else {
                     self.finish(term_window, None);
+                    return false;
                 }
             }
             WMEK::Release(_) => {

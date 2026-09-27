@@ -2421,6 +2421,13 @@ impl TermWindow {
                 // Chrome's menus; drawn over this one otherwise
                 menu.open_popup(self);
                 self.set_modal(Rc::new(menu));
+                // the button that led to the menu is released to the
+                // menu, not to the window: left as it was, the window
+                // took the next press, wherever, for one of what that
+                // button was pressed on (a press on a tab for one in the
+                // pane)
+                self.current_mouse_buttons.clear();
+                self.current_mouse_capture = None;
             }
             Err(err) => log::error!("PopupMenu: {err:#}"),
         }

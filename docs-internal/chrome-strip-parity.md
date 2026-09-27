@@ -240,8 +240,18 @@ margins and paddings, kMenuRadius 12, the elevation 12 shadow, given
 three sigmas of room where Chrome's half a blur left a line at the
 picture's edge; square and without a shadow where X11 has no compositing
 manager), at the right click's point or on its other side where the
-screen ends. A press beside the menu closes it and is not passed on
-(Chrome on Windows gives it to what is under it, RepostEventAndCancel).
+screen ends. A press beside the menu closes it and is the window's
+under it, as Chrome gives it on (MenuController::RepostEventAndCancel):
+a right press on a tab while the pane's menu is up brings the tab's up
+at once, a left press on a tab shows that tab. On X11 the popup takes
+the pointer on its body only (its input shape), so a press on its shadow
+is one on what is under the shadow; on Wayland the popup's input region
+is its body already; on Windows, where the popup has the capture, the
+press is posted to the window of the thread's under the point, for its
+client area or not, as RepostEventImpl does. The button that led to a
+menu is released to the menu: the window forgets it had it when the
+menu opens (left as it was, on Wayland, the next press on a tab was
+taken for one in the pane).
 
 An item's keys (`shortcut`, Chrome's minor text: an accelerator) end
 where the labels' room ends, right-aligned in a column as wide as the

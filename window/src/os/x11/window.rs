@@ -155,6 +155,29 @@ struct Popup {
     inside: bool,
 }
 
+/// The pointer is the popup's on its body only: a press on the shadow
+/// around it is one on what is under the shadow (this application's
+/// window: the press is its own, as Chrome gives a press beside a menu
+/// to what is under it; another's: the grab has it reported to the popup,
+/// beside its body).
+fn popup_input_shape(conn: &XConnection, window: xcb::x::Window, image: &crate::PopupImage) {
+    let (x, y, width, height) = image.body;
+    conn.send_request_unchecked(&xcb::shape::Rectangles {
+        operation: xcb::shape::So::Set,
+        destination_kind: xcb::shape::Sk::Input,
+        ordering: xcb::x::ClipOrdering::Unsorted,
+        destination_window: window,
+        x_offset: 0,
+        y_offset: 0,
+        rectangles: &[xcb::x::Rectangle {
+            x: x as i16,
+            y: y as i16,
+            width: width as u16,
+            height: height as u16,
+        }],
+    });
+}
+
 /// <https://specifications.freedesktop.org/wm-spec/wm-spec-latest.html#idm46409506331616>
 const _NET_WM_MOVERESIZE_MOVE: u32 = 8;
 const _NET_WM_MOVERESIZE_CANCEL: u32 = 11;
@@ -2461,6 +2484,7 @@ impl XWindowInner {
             drawable: xcb::x::Drawable::Window(window),
             value_list: &[],
         });
+        popup_input_shape(&conn, window, &image);
         conn.send_request_no_reply_log(&xcb::x::MapWindow { window });
         conn.child_to_parent_id
             .borrow_mut()
@@ -2509,6 +2533,7 @@ impl XWindowInner {
                 ],
             });
         }
+        popup_input_shape(&conn, popup.window, &image);
         popup.image = image;
         self.paint_popup();
         let _ = self.conn().flush();
