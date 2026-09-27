@@ -74,6 +74,7 @@ pub mod box_model;
 pub mod charselect;
 pub mod clipboard;
 pub mod keyevent;
+pub mod menuimage;
 pub mod modal;
 mod mouseevent;
 pub mod palette;
@@ -421,6 +422,10 @@ pub struct TermWindow {
     /// pointer moved the threshold with the button held.
     window_drag_started: bool,
     current_mouse_event: Option<MouseEvent>,
+    /// Where a tab was right-clicked, and when: its menu pops up there
+    /// (the click's handler asks for it a moment later, when the pointer
+    /// may have left: X11 tells of a leave when a button grabs it).
+    popup_anchor: Option<(::window::Point, Instant)>,
     prev_cursor: PrevCursorPos,
     last_scroll_info: RenderableDimensions,
 
@@ -559,6 +564,9 @@ impl TermWindow {
         self.load_os_parameters();
 
         if self.focused.is_none() {
+            if let Some(modal) = self.get_modal() {
+                modal.focus_lost(self);
+            }
             self.last_mouse_click = None;
             self.current_mouse_buttons.clear();
             self.current_mouse_capture = None;
@@ -766,6 +774,7 @@ impl TermWindow {
             window_drag_position: None,
             window_drag_started: false,
             current_mouse_event: None,
+            popup_anchor: None,
             current_modifier_and_leds: Default::default(),
             prev_cursor: PrevCursorPos::new(),
             last_scroll_info: RenderableDimensions::default(),
@@ -2386,8 +2395,14 @@ impl TermWindow {
     /// keyboard asked for it), about `pane`: the pane the action was
     /// performed for, which may be another tab's (a right click on a tab).
     fn show_popup_menu(&mut self, pane: &Arc<dyn Pane>, args: &config::keyassignment::PopupMenu) {
-        let at = match &self.current_mouse_event {
-            Some(event) => (event.coords.x as f32, event.coords.y as f32),
+        let anchor = self
+            .popup_anchor
+            .take()
+            .filter(|(_, when)| when.elapsed() < Duration::from_secs(3))
+            .map(|(at, _)| at)
+            .or_else(|| self.current_mouse_event.as_ref().map(|e| e.coords));
+        let at = match anchor {
+            Some(at) => (at.x as f32, at.y as f32),
             None => (
                 self.dimensions.pixel_width as f32 / 3.,
                 self.dimensions.pixel_height as f32 / 3.,
@@ -2401,8 +2416,20 @@ impl TermWindow {
             MuxPane(pane.pane_id()),
             at,
         ) {
-            Ok(menu) => self.set_modal(Rc::new(menu)),
+            Ok(menu) => {
+                // in a window of its own where there are such, as
+                // Chrome's menus; drawn over this one otherwise
+                menu.open_popup(self);
+                self.set_modal(Rc::new(menu));
+            }
             Err(err) => log::error!("PopupMenu: {err:#}"),
+        }
+    }
+
+    /// What happened to the popup window the modal shows itself in.
+    fn popup_event(&mut self, event: ::window::PopupEvent) {
+        if let Some(modal) = self.get_modal() {
+            modal.popup_event(event, self);
         }
     }
 

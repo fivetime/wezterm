@@ -151,6 +151,14 @@ impl ConnectionOps for Connection {
         }
     }
 
+    fn popups_translucent(&self) -> bool {
+        match self {
+            Self::X11(x) => x.popups_translucent(),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(w) => w.popups_translucent(),
+        }
+    }
+
     fn get_appearance(&self) -> Appearance {
         match self {
             Self::X11(x) => x.get_appearance(),
@@ -393,6 +401,35 @@ impl WindowOps for Window {
             // (Wayland has no request to lower a window)
             #[cfg(feature = "wayland")]
             Self::Wayland(_) => {}
+        }
+    }
+
+    fn show_popup(
+        &self,
+        at: crate::Point,
+        image: crate::PopupImage,
+        events: Box<dyn FnMut(crate::PopupEvent) + Send>,
+    ) -> bool {
+        match self {
+            Self::X11(x) => x.show_popup(at, image, events),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(w) => w.show_popup(at, image, events),
+        }
+    }
+
+    fn update_popup(&self, image: crate::PopupImage) {
+        match self {
+            Self::X11(x) => x.update_popup(image),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(w) => w.update_popup(image),
+        }
+    }
+
+    fn close_popup(&self) {
+        match self {
+            Self::X11(x) => x.close_popup(),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(w) => w.close_popup(),
         }
     }
 

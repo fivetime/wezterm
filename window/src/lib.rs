@@ -277,6 +277,34 @@ pub struct NativeMenuItem {
     pub header: bool,
 }
 
+/// What a popup window shows (`WindowOps::show_popup`): premultiplied
+/// BGRA (a 32-bit visual's order on a little-endian host), the top row
+/// first.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PopupImage {
+    pub width: usize,
+    pub height: usize,
+    pub data: Vec<u8>,
+    /// The popup itself within the picture (x, y, width, height); around
+    /// it its shadow, which is not the popup's to be pointed at.
+    pub body: (usize, usize, usize, usize),
+}
+
+/// What happens to a popup window, told to `WindowOps::show_popup`'s
+/// handler. Positions are the picture's pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PopupEvent {
+    /// The pointer is over the popup.
+    Motion(isize, isize),
+    /// The pointer left the popup.
+    Leave,
+    Press(isize, isize, MousePress),
+    Release(isize, isize, MousePress),
+    /// The popup went away other than by `close_popup`: a press outside
+    /// the application's windows, the window system closing it.
+    Dismissed,
+}
+
 #[async_trait(?Send)]
 pub trait WindowOps {
     /// Show a hidden window
@@ -347,6 +375,28 @@ pub trait WindowOps {
     ) -> bool {
         false
     }
+
+    /// Shows `image` in a window of its own that takes no focus, its
+    /// body's top left at `at` (the window's pixels) or, where the screen
+    /// ends, to the other side of that point: a menu, as Chrome's
+    /// (MenuHost), which may reach beyond the window. One at a time: it
+    /// replaces the one shown. `events` hears of the pointer on it, on
+    /// the main thread. `false`, and nothing shown or called, where there
+    /// are no such windows.
+    fn show_popup(
+        &self,
+        _at: Point,
+        _image: PopupImage,
+        _events: Box<dyn FnMut(PopupEvent) + Send>,
+    ) -> bool {
+        false
+    }
+
+    /// Another picture for the popup shown.
+    fn update_popup(&self, _image: PopupImage) {}
+
+    /// Closes the popup shown (its handler hears nothing more).
+    fn close_popup(&self) {}
 
     /// Puts the window beneath the others: a title bar's "lower" action
     /// (X11; Chrome's WindowEventFilterLinux::LowerWindow).

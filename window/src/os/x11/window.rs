@@ -138,6 +138,36 @@ pub(crate) struct XWindowInner {
     /// the margins, showing a resize cursor of ours instead.
     gui_cursor: Option<CursorIcon>,
     on_edge: bool,
+    popup: Option<Popup>,
+}
+
+/// A popup window (`WindowOps::show_popup`): a window of the screen's
+/// that the window manager leaves alone (override-redirect), the pointer
+/// grabbed for it while it shows, so that a press anywhere else is heard
+/// of; as Chrome's menus on X11.
+struct Popup {
+    window: xcb::x::Window,
+    colormap: xcb::x::Colormap,
+    gc: xcb::x::Gcontext,
+    image: crate::PopupImage,
+    events: Box<dyn FnMut(crate::PopupEvent) + Send>,
+    /// The pointer was over its body.
+    inside: bool,
+}
+
+/// Where a popup whose body is `size` goes for the point `at` of the
+/// `screen` (x, y, width, height): its top left at the point, or on the
+/// point's other side where the screen ends, and within the screen.
+fn place_popup(at: (i32, i32), size: (i32, i32), screen: (i32, i32, i32, i32)) -> (i32, i32) {
+    let one = |at: i32, size: i32, start: i32, length: i32| {
+        let end = start + length;
+        let pos = if at + size > end { at - size } else { at };
+        pos.min(end - size).max(start)
+    };
+    (
+        one(at.0, size.0, screen.0, screen.2),
+        one(at.1, size.1, screen.1, screen.3),
+    )
 }
 
 /// <https://specifications.freedesktop.org/wm-spec/wm-spec-latest.html#idm46409506331616>
@@ -159,6 +189,7 @@ impl Drop for XWindowInner {
                 conn.send_request_no_reply_log(&xcb::x::DestroyWindow {
                     window: self.window_id,
                 });
+                self.close_popup();
                 for (_, _, _, _, pixmap) in self.edge_pixmaps.drain(..) {
                     conn.send_request_no_reply_log(&xcb::x::FreePixmap { pixmap });
                 }
@@ -1138,6 +1169,9 @@ impl XWindowInner {
     }
 
     pub fn dispatch_event(&mut self, event: &Event) -> anyhow::Result<()> {
+        if self.popup_event(event) {
+            return Ok(());
+        }
         let conn = self.conn();
         match event {
             Event::X(xcb::x::Event::Expose(expose)) if expose.window() == self.window_id => {
@@ -2034,6 +2068,7 @@ impl XWindow {
                 edge_pixmaps: vec![],
                 gui_cursor: None,
                 on_edge: false,
+                popup: None,
             }))
         };
 
@@ -2330,6 +2365,285 @@ impl XWindowInner {
         // to _NET_WM_MOVERESIZE_SIZE_LEFT (7)
         self.net_wm_moveresize(pos.x as u32, pos.y as u32, edge as u32, 1);
         Ok(())
+    }
+
+    fn show_popup(
+        &mut self,
+        at: Point,
+        image: crate::PopupImage,
+        mut events: Box<dyn FnMut(crate::PopupEvent) + Send>,
+    ) {
+        self.close_popup();
+        let conn = self.conn();
+        // where the point is on the screen, and that monitor
+        let Ok(origin) = conn.send_and_wait_request(&xcb::x::TranslateCoordinates {
+            src_window: self.child_id,
+            dst_window: conn.root,
+            src_x: at.x as i16,
+            src_y: at.y as i16,
+        }) else {
+            events(crate::PopupEvent::Dismissed);
+            return;
+        };
+        let at = (i32::from(origin.dst_x()), i32::from(origin.dst_y()));
+        let screen = conn
+            .screens()
+            .ok()
+            .map(|screens| {
+                screens
+                    .by_name
+                    .values()
+                    .map(|info| info.rect)
+                    .find(|r| r.contains(euclid::point2(at.0 as isize, at.1 as isize)))
+                    .unwrap_or(screens.virtual_rect)
+            })
+            .map(|r| {
+                (
+                    r.min_x() as i32,
+                    r.min_y() as i32,
+                    r.width() as i32,
+                    r.height() as i32,
+                )
+            })
+            .unwrap_or((0, 0, i32::MAX / 2, i32::MAX / 2));
+        let body = image.body;
+        let (x, y) = place_popup(at, (body.2 as i32, body.3 as i32), screen);
+        let (x, y) = (x - body.0 as i32, y - body.1 as i32);
+
+        let window = conn.generate_id();
+        let colormap = conn.generate_id();
+        let gc = conn.generate_id();
+        conn.send_request_no_reply_log(&xcb::x::CreateColormap {
+            alloc: xcb::x::ColormapAlloc::None,
+            mid: colormap,
+            window: conn.root,
+            visual: conn.visual.visual_id(),
+        });
+        conn.send_request_no_reply_log(&xcb::x::CreateWindow {
+            depth: conn.depth,
+            wid: window,
+            parent: conn.root,
+            x: x as i16,
+            y: y as i16,
+            width: image.width as u16,
+            height: image.height as u16,
+            border_width: 0,
+            class: xcb::x::WindowClass::InputOutput,
+            visual: conn.visual.visual_id(),
+            value_list: &[
+                xcb::x::Cw::BackPixel(0),
+                xcb::x::Cw::BorderPixel(0),
+                xcb::x::Cw::OverrideRedirect(true),
+                xcb::x::Cw::EventMask(
+                    xcb::x::EventMask::EXPOSURE
+                        | xcb::x::EventMask::BUTTON_PRESS
+                        | xcb::x::EventMask::BUTTON_RELEASE
+                        | xcb::x::EventMask::POINTER_MOTION
+                        | xcb::x::EventMask::LEAVE_WINDOW,
+                ),
+                xcb::x::Cw::Colormap(colormap),
+            ],
+        });
+        // what it is, for the compositing manager (its shadow is its own)
+        let atom = |name: &[u8]| {
+            let cookie = conn.conn().send_request(&xcb::x::InternAtom {
+                only_if_exists: false,
+                name,
+            });
+            conn.conn().wait_for_reply(cookie).map(|r| r.atom()).ok()
+        };
+        if let (Some(kind), Some(menu)) = (
+            atom(b"_NET_WM_WINDOW_TYPE"),
+            atom(b"_NET_WM_WINDOW_TYPE_POPUP_MENU"),
+        ) {
+            conn.send_request_no_reply_log(&xcb::x::ChangeProperty {
+                mode: PropMode::Replace,
+                window,
+                property: kind,
+                r#type: xcb::x::ATOM_ATOM,
+                data: &[menu],
+            });
+        }
+        conn.send_request_no_reply_log(&xcb::x::ChangeProperty {
+            mode: PropMode::Replace,
+            window,
+            property: xcb::x::ATOM_WM_TRANSIENT_FOR,
+            r#type: xcb::x::ATOM_WINDOW,
+            data: &[self.window_id],
+        });
+        conn.send_request_no_reply_log(&xcb::x::CreateGc {
+            cid: gc,
+            drawable: xcb::x::Drawable::Window(window),
+            value_list: &[],
+        });
+        conn.send_request_no_reply_log(&xcb::x::MapWindow { window });
+        conn.child_to_parent_id
+            .borrow_mut()
+            .insert(window, self.window_id);
+        self.popup = Some(Popup {
+            window,
+            colormap,
+            gc,
+            image,
+            events,
+            inside: false,
+        });
+        self.paint_popup();
+        // the pointer's events elsewhere come to the popup too; those on
+        // this application's windows stay theirs
+        match conn.send_and_wait_request(&xcb::x::GrabPointer {
+            owner_events: true,
+            grab_window: window,
+            event_mask: xcb::x::EventMask::BUTTON_PRESS
+                | xcb::x::EventMask::BUTTON_RELEASE
+                | xcb::x::EventMask::POINTER_MOTION,
+            pointer_mode: xcb::x::GrabMode::Async,
+            keyboard_mode: xcb::x::GrabMode::Async,
+            confine_to: xcb::x::Window::none(),
+            cursor: xcb::x::Cursor::none(),
+            time: xcb::x::CURRENT_TIME,
+        }) {
+            Ok(reply) if reply.status() == xcb::x::GrabStatus::Success => {}
+            Ok(reply) => log::warn!("popup: the pointer was not grabbed: {:?}", reply.status()),
+            Err(err) => log::warn!("popup: the pointer was not grabbed: {err:#}"),
+        }
+        let _ = conn.flush();
+    }
+
+    fn update_popup(&mut self, image: crate::PopupImage) {
+        let conn = self.conn();
+        let Some(popup) = self.popup.as_mut() else {
+            return;
+        };
+        if (popup.image.width, popup.image.height) != (image.width, image.height) {
+            conn.send_request_no_reply_log(&xcb::x::ConfigureWindow {
+                window: popup.window,
+                value_list: &[
+                    xcb::x::ConfigWindow::Width(image.width as u32),
+                    xcb::x::ConfigWindow::Height(image.height as u32),
+                ],
+            });
+        }
+        popup.image = image;
+        self.paint_popup();
+        let _ = self.conn().flush();
+    }
+
+    fn paint_popup(&mut self) {
+        let conn = self.conn();
+        let Some(popup) = self.popup.as_ref() else {
+            return;
+        };
+        // a few rows per request, well inside any request size limit
+        let row = popup.image.width * 4;
+        let rows = (256 * 1024 / row.max(1)).max(1);
+        for (i, chunk) in popup.image.data.chunks(row * rows).enumerate() {
+            conn.send_request_unchecked(&xcb::x::PutImage {
+                format: xcb::x::ImageFormat::ZPixmap,
+                drawable: xcb::x::Drawable::Window(popup.window),
+                gc: popup.gc,
+                width: popup.image.width as u16,
+                height: (chunk.len() / row) as u16,
+                dst_x: 0,
+                dst_y: (i * rows) as i16,
+                left_pad: 0,
+                depth: conn.depth,
+                data: chunk,
+            });
+        }
+    }
+
+    fn close_popup(&mut self) {
+        let Some(popup) = self.popup.take() else {
+            return;
+        };
+        let conn = self.conn();
+        conn.child_to_parent_id.borrow_mut().remove(&popup.window);
+        conn.send_request_no_reply_log(&xcb::x::UngrabPointer {
+            time: xcb::x::CURRENT_TIME,
+        });
+        conn.send_request_no_reply_log(&xcb::x::DestroyWindow {
+            window: popup.window,
+        });
+        conn.send_request_no_reply_log(&xcb::x::FreeGc { gc: popup.gc });
+        conn.send_request_no_reply_log(&xcb::x::FreeColormap {
+            cmap: popup.colormap,
+        });
+        let _ = conn.flush();
+    }
+
+    /// The popup's share of the events: whether `event` was its own.
+    fn popup_event(&mut self, event: &Event) -> bool {
+        use crate::PopupEvent;
+        let Some(popup) = self.popup.as_mut() else {
+            return false;
+        };
+        let body = popup.image.body;
+        let within = |x: i16, y: i16| {
+            let (x, y) = (i32::from(x), i32::from(y));
+            x >= body.0 as i32
+                && y >= body.1 as i32
+                && x < (body.0 + body.2) as i32
+                && y < (body.1 + body.3) as i32
+        };
+        let button = |detail: u8| match detail {
+            1 => Some(MousePress::Left),
+            2 => Some(MousePress::Middle),
+            3 => Some(MousePress::Right),
+            _ => None,
+        };
+        match event {
+            Event::X(xcb::x::Event::Expose(e)) if e.window() == popup.window => {
+                if e.count() == 0 {
+                    self.paint_popup();
+                    let _ = self.conn().flush();
+                }
+            }
+            Event::X(xcb::x::Event::MotionNotify(e)) if e.event() == popup.window => {
+                if within(e.event_x(), e.event_y()) {
+                    popup.inside = true;
+                    (popup.events)(PopupEvent::Motion(
+                        e.event_x() as isize,
+                        e.event_y() as isize,
+                    ));
+                } else if std::mem::take(&mut popup.inside) {
+                    (popup.events)(PopupEvent::Leave);
+                }
+            }
+            Event::X(xcb::x::Event::LeaveNotify(e)) if e.event() == popup.window => {
+                if std::mem::take(&mut popup.inside) {
+                    (popup.events)(PopupEvent::Leave);
+                }
+            }
+            Event::X(xcb::x::Event::ButtonPress(e)) if e.event() == popup.window => {
+                let Some(button) = button(e.detail()) else {
+                    return true;
+                };
+                if within(e.event_x(), e.event_y()) {
+                    (popup.events)(PopupEvent::Press(
+                        e.event_x() as isize,
+                        e.event_y() as isize,
+                        button,
+                    ));
+                } else {
+                    // a press on another application, or on its shadow
+                    (popup.events)(PopupEvent::Dismissed);
+                    self.close_popup();
+                }
+            }
+            Event::X(xcb::x::Event::ButtonRelease(e)) if e.event() == popup.window => {
+                if let (Some(button), true) = (button(e.detail()), within(e.event_x(), e.event_y()))
+                {
+                    (popup.events)(PopupEvent::Release(
+                        e.event_x() as isize,
+                        e.event_y() as isize,
+                        button,
+                    ));
+                }
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// Beneath the other windows (Chrome's X11Window::LowerWindow: the
@@ -2703,6 +3017,33 @@ impl WindowOps for XWindow {
     fn lower(&self) {
         XConnection::with_window_inner(self.0, move |inner| {
             inner.lower();
+            Ok(())
+        });
+    }
+
+    fn show_popup(
+        &self,
+        at: Point,
+        image: crate::PopupImage,
+        events: Box<dyn FnMut(crate::PopupEvent) + Send>,
+    ) -> bool {
+        XConnection::with_window_inner(self.0, move |inner| {
+            inner.show_popup(at, image, events);
+            Ok(())
+        });
+        true
+    }
+
+    fn update_popup(&self, image: crate::PopupImage) {
+        XConnection::with_window_inner(self.0, move |inner| {
+            inner.update_popup(image);
+            Ok(())
+        });
+    }
+
+    fn close_popup(&self) {
+        XConnection::with_window_inner(self.0, move |inner| {
+            inner.close_popup();
             Ok(())
         });
     }

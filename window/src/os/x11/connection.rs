@@ -232,6 +232,10 @@ impl ConnectionOps for XConnection {
         *self.default_dpi.borrow()
     }
 
+    fn popups_translucent(&self) -> bool {
+        self.depth == 32 && self.has_compositor()
+    }
+
     fn get_appearance(&self) -> Appearance {
         match promise::spawn::block_on(crate::os::xdg_desktop_portal::get_appearance()) {
             Ok(Some(appearance)) => return appearance,

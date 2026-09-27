@@ -39,6 +39,14 @@ pub trait ConnectionOps {
 
     fn name(&self) -> String;
 
+    /// Whether a popup window (`WindowOps::show_popup`) can be
+    /// translucent: round corners, a shadow around it. Not on X11
+    /// without a compositing manager, as Chrome's menus are square there
+    /// (MenuConfig::CornerRadiusForMenu).
+    fn popups_translucent(&self) -> bool {
+        true
+    }
+
     fn set_event_handler(&self, func: fn(ApplicationEvent)) {
         let mut handler = EVENT_HANDLER.lock().unwrap();
         *handler = func;

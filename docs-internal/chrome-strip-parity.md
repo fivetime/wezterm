@@ -227,8 +227,15 @@ Chrome's context menus there (MenuRunnerImplMac: an NSMenu, popped up
 with popUpMenuPositioningItem:atLocation:inView:), so it reaches beyond
 the window and looks and behaves as the system's menus do; without the
 icons, which are nerdfont glyphs. Elsewhere Chrome draws its own menu in
-a window of its own (MenuHost); here it is still drawn within the window
-(`PopupMenu`), cut off where the window is smaller than the menu.
+a window of its own (MenuHost), and so does `PopupMenu` where the window
+has popups (`WindowOps::show_popup`; X11: an override-redirect window
+with the pointer grabbed): painted as a picture with Chrome's numbers
+(`menuimage.rs`: MenuConfig's margins and paddings, kMenuRadius 12, the
+elevation 12 shadow; square and without a shadow where X11 has no
+compositing manager), at the right click's point or on its other side
+where the screen ends. Where the window has none (Wayland, Windows: to
+come) the menu is still drawn within the window, cut off where the
+window is smaller than the menu.
 
 Text: `text.gtk_font_name_parse` (the desktop font at Chrome's
 whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`

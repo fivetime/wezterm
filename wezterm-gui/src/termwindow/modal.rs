@@ -44,5 +44,10 @@ pub trait Modal: Downcast {
         term_window: &mut TermWindow,
     ) -> anyhow::Result<Ref<'_, [ComputedElement]>>;
     fn reconfigure(&self, term_window: &mut TermWindow);
+    /// What happened to the modal's popup window (`WindowOps::
+    /// show_popup`), where it shows itself in one.
+    fn popup_event(&self, _event: ::window::PopupEvent, _term_window: &mut TermWindow) {}
+    /// The window lost the keyboard's focus.
+    fn focus_lost(&self, _term_window: &mut TermWindow) {}
 }
 impl_downcast!(Modal);

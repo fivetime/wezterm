@@ -16,7 +16,7 @@ use std::convert::TryInto;
 use std::ops::Sub;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use termwiz::hyperlink::Hyperlink;
 use termwiz::surface::Line;
 use wezterm_dynamic::ToDynamic;
@@ -749,6 +749,7 @@ impl super::TermWindow {
             },
             WMEK::Press(MousePress::Right) => match item {
                 TabBarItem::Tab { tab_idx, .. } => {
+                    self.popup_anchor = Some((event.coords, Instant::now()));
                     self.do_tab_right_click(tab_idx);
                 }
                 TabBarItem::NewTabButton { .. } => {

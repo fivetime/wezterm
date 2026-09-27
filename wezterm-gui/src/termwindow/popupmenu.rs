@@ -17,12 +17,13 @@
 use crate::overlay::selector::trampoline;
 use crate::scripting::guiwin::GuiWin;
 use crate::termwindow::box_model::*;
+use crate::termwindow::menuimage::{MenuColors, MenuLayout};
 use crate::termwindow::modal::Modal;
 use crate::termwindow::render::corners::{
     BOTTOM_LEFT_ROUNDED_CORNER, BOTTOM_RIGHT_ROUNDED_CORNER, TOP_LEFT_ROUNDED_CORNER,
     TOP_RIGHT_ROUNDED_CORNER,
 };
-use crate::termwindow::{DimensionContext, TermWindow, UIItemType};
+use crate::termwindow::{DimensionContext, TermWindow, TermWindowNotif, UIItemType};
 use crate::utilsprites::RenderMetrics;
 use config::keyassignment::{InputSelectorEntry, KeyAssignment, PopupMenu as PopupMenuArgs};
 use config::Dimension;
@@ -31,7 +32,10 @@ use std::cell::{Cell, Ref, RefCell};
 use termwiz::nerdfonts::NERD_FONTS;
 use wezterm_term::{KeyCode, KeyModifiers, MouseEvent};
 use window::color::LinearRgba;
-use window::{MouseEvent as WindowMouseEvent, MouseEventKind as WMEK, RectF};
+use window::{
+    Connection, ConnectionOps, MouseEvent as WindowMouseEvent, MouseEventKind as WMEK, PopupEvent,
+    RectF, Window, WindowOps,
+};
 
 /// How far the pointer must move before a held button counts as a drag
 /// onto an item.
@@ -57,6 +61,18 @@ pub struct PopupMenu {
     /// counts as inside.
     bounds: Cell<Option<RectF>>,
     element: RefCell<Option<Vec<ComputedElement>>>,
+    /// Shown in a window of its own (`open_popup`), where there are
+    /// such: as the window's, and laid out as this.
+    popup: RefCell<Option<(Window, MenuLayout)>>,
+}
+
+impl Drop for PopupMenu {
+    fn drop(&mut self) {
+        // however the menu went, its window goes with it
+        if let Some((window, _)) = self.popup.borrow_mut().take() {
+            window.close_popup();
+        }
+    }
 }
 
 impl PopupMenu {
@@ -77,7 +93,74 @@ impl PopupMenu {
             moved: Cell::new(false),
             bounds: Cell::new(None),
             element: RefCell::new(None),
+            popup: RefCell::new(None),
         })
+    }
+
+    fn layout(&self, term_window: &TermWindow, window: &Window) -> anyhow::Result<MenuLayout> {
+        let font = term_window.fonts.title_font()?;
+        let (bg, fg) = (
+            *term_window.config.command_palette_bg_color,
+            *term_window.config.command_palette_fg_color,
+        );
+        let translucent = Connection::get().is_some_and(|c| c.popups_translucent());
+        // (fonts found later for what the title font has not: laid out
+        // again then, see `reconfigure`)
+        let notified = window.clone();
+        let on_fonts = std::sync::Arc::new(move || {
+            notified.notify(TermWindowNotif::Apply(Box::new(|term_window| {
+                term_window.invalidate_modal();
+            })));
+        });
+        Ok(MenuLayout::new(
+            &self.args.choices,
+            &font,
+            MenuColors {
+                bg: [bg.0, bg.1, bg.2],
+                fg: [fg.0, fg.1, fg.2],
+            },
+            term_window.dimensions.dpi,
+            translucent,
+            on_fonts,
+        ))
+    }
+
+    /// Shows the menu in a window of its own at the pointer, as Chrome's
+    /// menus are (MenuHost), where the window system has such windows:
+    /// it then reaches beyond this window. Drawn over this window
+    /// otherwise, as before.
+    pub fn open_popup(&self, term_window: &mut TermWindow) {
+        let Some(window) = term_window.window.clone() else {
+            return;
+        };
+        let layout = match self.layout(term_window, &window) {
+            Ok(layout) => layout,
+            Err(err) => {
+                log::error!("PopupMenu: {err:#}");
+                return;
+            }
+        };
+        let notified = window.clone();
+        let shown = window.show_popup(
+            ::window::Point::new(self.at.0 as isize, self.at.1 as isize),
+            layout.paint(self.selected.get()),
+            Box::new(move |event| {
+                notified.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+                    term_window.popup_event(event)
+                })));
+            }),
+        );
+        if shown {
+            self.popup.borrow_mut().replace((window, layout));
+        }
+    }
+
+    /// The popup window's picture again, for another highlighted line.
+    fn repaint(&self, term_window: &mut TermWindow) {
+        match self.popup.borrow().as_ref() {
+            Some((window, layout)) => window.update_popup(layout.paint(self.selected.get())),
+            None => term_window.invalidate_modal(),
+        }
     }
 
     fn choosable(&self, idx: usize) -> bool {
@@ -97,6 +180,9 @@ impl PopupMenu {
                 id: c.id.clone(),
             });
         let window = GuiWin::new(term_window);
+        if let Some((window, _)) = self.popup.borrow_mut().take() {
+            window.close_popup();
+        }
         term_window.cancel_modal();
         trampoline(self.event_name.clone(), window, self.pane, entry);
     }
@@ -302,6 +388,14 @@ impl Modal for PopupMenu {
     }
 
     fn window_mouse_event(&self, event: &WindowMouseEvent, term_window: &mut TermWindow) -> bool {
+        if self.popup.borrow().is_some() {
+            // the menu is not in this window: a press here is one
+            // outside the menu
+            if let WMEK::Press(_) = &event.kind {
+                self.finish(term_window, None);
+            }
+            return true;
+        }
         let (x, y) = (event.coords.x as f32, event.coords.y as f32);
         let inside = self
             .bounds
@@ -359,11 +453,11 @@ impl Modal for PopupMenu {
             (KeyCode::Escape, _) => self.finish(term_window, None),
             (KeyCode::UpArrow, KeyModifiers::NONE) => {
                 self.step(-1);
-                term_window.invalidate_modal();
+                self.repaint(term_window);
             }
             (KeyCode::DownArrow, KeyModifiers::NONE) => {
                 self.step(1);
-                term_window.invalidate_modal();
+                self.repaint(term_window);
             }
             (KeyCode::Enter, KeyModifiers::NONE) => {
                 if let Some(idx) = self.selected.get().filter(|&idx| self.choosable(idx)) {
@@ -380,6 +474,10 @@ impl Modal for PopupMenu {
         &self,
         term_window: &mut TermWindow,
     ) -> anyhow::Result<Ref<'_, [ComputedElement]>> {
+        if self.popup.borrow().is_some() {
+            // nothing of it is drawn in this window
+            self.element.borrow_mut().get_or_insert_with(Vec::new);
+        }
         if self.element.borrow().is_none() {
             let element = self.compute(term_window)?;
             self.bounds.set(element.first().map(|e| e.bounds));
@@ -390,7 +488,67 @@ impl Modal for PopupMenu {
         }))
     }
 
-    fn reconfigure(&self, _term_window: &mut TermWindow) {
+    fn reconfigure(&self, term_window: &mut TermWindow) {
         self.element.borrow_mut().take();
+        // the popup window's picture with the fonts and colours of now
+        let window = self.popup.borrow().as_ref().map(|(w, _)| w.clone());
+        if let Some(window) = window {
+            match self.layout(term_window, &window) {
+                Ok(layout) => {
+                    window.update_popup(layout.paint(self.selected.get()));
+                    self.popup.borrow_mut().replace((window, layout));
+                }
+                Err(err) => log::error!("PopupMenu: {err:#}"),
+            }
+        }
+    }
+
+    fn popup_event(&self, event: PopupEvent, term_window: &mut TermWindow) {
+        let at = |x: isize, y: isize| {
+            self.popup
+                .borrow()
+                .as_ref()
+                .and_then(|(_, layout)| layout.choosable_at(x, y))
+        };
+        match event {
+            PopupEvent::Motion(x, y) => {
+                self.moved.set(true);
+                let item = at(x, y);
+                if item != self.selected.get() {
+                    self.selected.set(item);
+                    self.repaint(term_window);
+                }
+            }
+            PopupEvent::Leave => {
+                if self.selected.take().is_some() {
+                    self.repaint(term_window);
+                }
+            }
+            PopupEvent::Press(x, y, _) => self.pressed.set(at(x, y)),
+            PopupEvent::Release(x, y, _) => {
+                // a click on an item, or the opening button dragged to one
+                let dragged = self.pressed.get().is_none() && self.moved.get();
+                let item = at(x, y);
+                let pressed = self.pressed.take();
+                if let Some(idx) = item {
+                    if pressed == Some(idx) || dragged {
+                        self.finish(term_window, Some(idx));
+                    }
+                }
+            }
+            PopupEvent::Dismissed => {
+                // (its window is gone already)
+                self.popup.borrow_mut().take();
+                self.finish(term_window, None);
+            }
+        }
+    }
+
+    fn focus_lost(&self, term_window: &mut TermWindow) {
+        // a menu in a window of its own goes when the application is
+        // left, as any menu does
+        if self.popup.borrow().is_some() {
+            self.finish(term_window, None);
+        }
     }
 }
