@@ -20,6 +20,11 @@ struct WglWrapper {
     lib: libloading::Library,
     wgl: ffi::Wgl,
     ext: Option<ffiextra::Wgl>,
+    /// Mesa's opengl32.dll, loaded by its path (`create`): gdi32's pixel
+    /// format and SwapBuffers calls reach the system's opengl32.dll, not
+    /// this one, so they go to its own wgl* exports instead; otherwise
+    /// Mesa drew and nothing showed (a white window)
+    mesa: bool,
 }
 
 type GetProcAddressFunc =
@@ -139,7 +144,59 @@ impl WglWrapper {
             lib,
             wgl,
             ext: None,
+            mesa: mesa.is_some(),
         })
+    }
+
+    /// One of the library's own wgl* functions, where it is Mesa's
+    unsafe fn own<T: Copy>(&self, name: &[u8]) -> Option<T> {
+        if !self.mesa {
+            return None;
+        }
+        unsafe { self.lib.get::<T>(name) }.ok().map(|f| *f)
+    }
+
+    unsafe fn choose_pixel_format(&self, hdc: HDC, pfd: *const PIXELFORMATDESCRIPTOR) -> i32 {
+        type F = unsafe extern "system" fn(HDC, *const PIXELFORMATDESCRIPTOR) -> i32;
+        match unsafe { self.own::<F>(b"wglChoosePixelFormat\0") } {
+            Some(f) => unsafe { f(hdc, pfd) },
+            None => unsafe { ChoosePixelFormat(hdc, pfd) },
+        }
+    }
+
+    unsafe fn describe_pixel_format(
+        &self,
+        hdc: HDC,
+        format: i32,
+        pfd: *mut PIXELFORMATDESCRIPTOR,
+    ) -> i32 {
+        type F = unsafe extern "system" fn(HDC, i32, u32, *mut PIXELFORMATDESCRIPTOR) -> i32;
+        let size = std::mem::size_of::<PIXELFORMATDESCRIPTOR>() as u32;
+        match unsafe { self.own::<F>(b"wglDescribePixelFormat\0") } {
+            Some(f) => unsafe { f(hdc, format, size, pfd) },
+            None => unsafe { DescribePixelFormat(hdc, format, size, pfd) },
+        }
+    }
+
+    unsafe fn set_pixel_format(
+        &self,
+        hdc: HDC,
+        format: i32,
+        pfd: *const PIXELFORMATDESCRIPTOR,
+    ) -> i32 {
+        type F = unsafe extern "system" fn(HDC, i32, *const PIXELFORMATDESCRIPTOR) -> i32;
+        match unsafe { self.own::<F>(b"wglSetPixelFormat\0") } {
+            Some(f) => unsafe { f(hdc, format, pfd) },
+            None => unsafe { SetPixelFormat(hdc, format, pfd) },
+        }
+    }
+
+    unsafe fn swap_buffers(&self, hdc: HDC) {
+        type F = unsafe extern "system" fn(HDC) -> i32;
+        match unsafe { self.own::<F>(b"wglSwapBuffers\0") } {
+            Some(f) => unsafe { f(hdc) },
+            None => unsafe { SwapBuffers(hdc) },
+        };
     }
 
     fn load_ext(&mut self) -> anyhow::Result<()> {
@@ -279,14 +336,7 @@ impl GlState {
 
         let mut pfd: PIXELFORMATDESCRIPTOR = unsafe { std::mem::zeroed() };
 
-        let res = unsafe {
-            DescribePixelFormat(
-                hdc,
-                format_id,
-                std::mem::size_of::<PIXELFORMATDESCRIPTOR>() as _,
-                &mut pfd,
-            )
-        };
+        let res = unsafe { wgl.describe_pixel_format(hdc, format_id, &mut pfd) };
         if res == 0 {
             anyhow::bail!(
                 "DescribePixelFormat function failed: {}",
@@ -294,7 +344,7 @@ impl GlState {
             );
         }
 
-        let res = unsafe { SetPixelFormat(hdc, format_id, &pfd) };
+        let res = unsafe { wgl.set_pixel_format(hdc, format_id, &pfd) };
         if res == 0 {
             anyhow::bail!(
                 "SetPixelFormat function failed: {}",
@@ -378,9 +428,9 @@ impl GlState {
             dwVisibleMask: 0,
             dwDamageMask: 0,
         };
-        let format = unsafe { ChoosePixelFormat(hdc, &pfd) };
+        let format = unsafe { wgl.choose_pixel_format(hdc, &pfd) };
         unsafe {
-            SetPixelFormat(hdc, format, &pfd);
+            wgl.set_pixel_format(hdc, format, &pfd);
         }
 
         let rc = unsafe { wgl.wgl.CreateContext(hdc as *mut _) };
@@ -425,8 +475,8 @@ unsafe impl glium::backend::Backend for GlState {
     }
 
     fn swap_buffers(&self) -> Result<(), glium::SwapBuffersError> {
-        unsafe {
-            SwapBuffers(self.hdc);
+        if let Some(wgl) = self.wgl.as_ref() {
+            unsafe { wgl.swap_buffers(self.hdc) };
         }
         Ok(())
     }
