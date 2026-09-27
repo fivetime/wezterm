@@ -215,7 +215,12 @@ in a full screen transition. The window paints in `windowDidResize:`,
 unthrottled, and the Metal layer presents with the transaction while the
 size changes (`presentsWithTransaction`, through a vendored wgpu-hal
 whose Metal surface flag is atomic, `deps/wgpu-hal`), so the frame and
-the content change together.
+the content change together. An opaque window's background is the
+terminal's background colour, not the clear colour: with that the window
+server made the window's shadow from its contents at every step, and a
+zoom showed 3-4 sizes with the screen still for a third of a second;
+now 15-16 in 345 ms (a plain AppKit window: 19), measured on the screen
+(NativeTerm's docs/ROADMAP.md, 2026-09-27).
 
 Text: `text.gtk_font_name_parse` (the desktop font at Chrome's
 whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`

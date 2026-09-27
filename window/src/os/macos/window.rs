@@ -59,10 +59,26 @@ const NSViewLayerContentsPlacementTopLeft: NSInteger = 11;
 const NSViewLayerContentsRedrawDuringViewResize: NSInteger = 2;
 
 /// Returns the background color to use for the window.
-unsafe fn window_background_color(is_opaque: bool) -> id {
+unsafe fn window_background_color(is_opaque: bool, config: &ConfigHandle) -> id {
     let clear_color = cocoa::appkit::NSColor::clearColor(nil);
     if is_opaque {
-        clear_color
+        // An opaque window's is opaque: the terminal's own background. The
+        // clear color it had put it into the mode described below, and
+        // the window server made its shadow from its contents at each
+        // step of a resize: a zoom (3840x2400, the Intel GPU driving the
+        // screen) showed 3.5 sizes in 490 ms, the screen still for up to
+        // 350 ms, and with this 15-16 in 350 ms, still for 65 at most (a
+        // plain AppKit window: 19 in 345 ms). An opaque layer or view made
+        // no difference.
+        let color = config
+            .resolved_palette
+            .background
+            .unwrap_or(RgbaColor::from(SrgbaTuple(0., 0., 0., 1.)));
+        let color: id = msg_send![class!(NSColor), colorWithSRGBRed: color.0 as f64
+                                                   green: color.1 as f64
+                                                   blue: color.2 as f64
+                                                   alpha: 1f64];
+        color
     } else {
         // An alpha of zero puts NSWindow into a special mode for irregularly
         // shaped windows, where shadows are generated from the window contents.
@@ -595,7 +611,7 @@ impl Window {
 
             window.setReleasedWhenClosed_(NO);
             let is_opaque = config.window_background_opacity >= 1.0;
-            window.setBackgroundColor_(window_background_color(is_opaque));
+            window.setBackgroundColor_(window_background_color(is_opaque, &config));
 
             // Tell Cocoa that we output in sRGB, so it handles color space
             // conversion for non-sRGB displays.
@@ -1240,7 +1256,7 @@ impl WindowInner {
             self.window.setHasShadow_(to_yes_no(needs_shadow));
 
             self.window
-                .setBackgroundColor_(window_background_color(is_opaque));
+                .setBackgroundColor_(window_background_color(is_opaque, &self.config));
         }
     }
 
