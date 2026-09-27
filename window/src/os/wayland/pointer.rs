@@ -37,6 +37,12 @@ impl PointerHandler for WaylandState {
             .unwrap();
 
         for evt in events {
+            if let PointerEventKind::Press { serial, .. } = &evt.kind {
+                *self.last_press_serial.borrow_mut() = *serial;
+            }
+            if self.popup_pointer_event(evt) {
+                continue;
+            }
             if let PointerEventKind::Enter { .. } = &evt.kind {
                 let surface_id = evt.surface.id();
                 self.active_surface_id = RefCell::new(Some(surface_id.clone()));
@@ -199,6 +205,23 @@ fn event_serial(event: &PointerEvent) -> Option<u32> {
 }
 
 impl WaylandState {
+    /// The pointer's event on a window's popup: whether it was one.
+    fn popup_pointer_event(&mut self, evt: &PointerEvent) -> bool {
+        let windows = self.windows.borrow();
+        for window in windows.values() {
+            let mut inner = window.borrow_mut();
+            if let Some(popup) = inner
+                .popup
+                .as_mut()
+                .filter(|p| p.popup.wl_surface().id() == evt.surface.id())
+            {
+                popup.pointer_event(evt);
+                return true;
+            }
+        }
+        false
+    }
+
     fn pointer_window_frame(&mut self, pointer: &WlPointer, events: &[PointerEvent]) {
         let windows = self.windows.borrow();
 

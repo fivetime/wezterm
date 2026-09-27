@@ -367,6 +367,7 @@ impl WaylandWindow {
             wegl_surface: None,
             gl_state: None,
             ext_background_effect_surface: None,
+            popup: None,
             edge,
         }));
 
@@ -486,6 +487,33 @@ impl WindowOps for WaylandWindow {
     fn show_window_menu(&self, coords: Point, _screen_coords: ScreenPoint) {
         WaylandConnection::with_window_inner(self.0, move |inner| {
             inner.show_window_menu(coords);
+            Ok(())
+        });
+    }
+
+    fn show_popup(
+        &self,
+        at: Point,
+        image: crate::PopupImage,
+        events: Box<dyn FnMut(crate::PopupEvent) + Send>,
+    ) -> bool {
+        WaylandConnection::with_window_inner(self.0, move |inner| {
+            inner.show_popup(at, image, events);
+            Ok(())
+        });
+        true
+    }
+
+    fn update_popup(&self, image: crate::PopupImage) {
+        WaylandConnection::with_window_inner(self.0, move |inner| {
+            inner.update_popup(image);
+            Ok(())
+        });
+    }
+
+    fn close_popup(&self) {
+        WaylandConnection::with_window_inner(self.0, move |inner| {
+            inner.close_popup();
             Ok(())
         });
     }
@@ -720,9 +748,236 @@ pub struct WaylandWindowInner {
     gl_state: Option<Rc<glium::backend::Context>>,
     ext_background_effect_surface: Option<ExtBackgroundEffectSurfaceV1>,
     pub(super) edge: Option<WaylandEdge>,
+    pub(super) popup: Option<WaylandPopup>,
+}
+
+/// A popup window (`WindowOps::show_popup`): an xdg_popup of the window's,
+/// as Chrome's menus on Wayland, placed by the compositor at the point
+/// or, where the screen ends, on its other side (the positioner's flip
+/// and slide), and with a grab of the input where the compositor gives
+/// one: a press outside the application then dismisses it.
+pub(super) struct WaylandPopup {
+    pub(super) popup: smithay_client_toolkit::shell::xdg::popup::Popup,
+    image: crate::PopupImage,
+    pub(super) events: Box<dyn FnMut(crate::PopupEvent) + Send>,
+    buffer: Option<smithay_client_toolkit::shm::slot::Buffer>,
+    scale: i32,
+    /// The compositor said where it is: it may be drawn.
+    pub(super) configured: bool,
+    /// It asked for the input's grab.
+    pub(super) grabbed: bool,
+    pub(super) since: Instant,
+    /// The pointer was over its body.
+    inside: bool,
+    at: (isize, isize),
+}
+
+impl WaylandPopup {
+    /// The picture to the popup's surface. A buffer's sizes are whole
+    /// multiples of its scale: the picture's last row and column are
+    /// padded, clear.
+    pub(super) fn draw(
+        &mut self,
+        pool: &mut smithay_client_toolkit::shm::slot::SlotPool,
+        compositor: &smithay_client_toolkit::compositor::CompositorState,
+    ) {
+        if !self.configured {
+            return;
+        }
+        let scale = self.scale.max(1) as usize;
+        let (width, height) = (self.image.width, self.image.height);
+        let (bw, bh) = (
+            width.div_ceil(scale) * scale,
+            height.div_ceil(scale) * scale,
+        );
+        let Ok((buffer, canvas)) = pool.create_buffer(
+            bw as i32,
+            bh as i32,
+            bw as i32 * 4,
+            wayland_client::protocol::wl_shm::Format::Argb8888,
+        ) else {
+            log::warn!("popup: no buffer for {bw}x{bh}");
+            return;
+        };
+        canvas[..bw * bh * 4].fill(0);
+        for y in 0..height {
+            canvas[y * bw * 4..][..width * 4]
+                .copy_from_slice(&self.image.data[y * width * 4..][..width * 4]);
+        }
+        let surface = self.popup.wl_surface();
+        let s = |px: usize| (px / scale) as i32;
+        let body = self.image.body;
+        // the popup is its body: what the compositor places, and what
+        // takes the pointer (its shadow lets it through)
+        self.popup.xdg_surface().set_window_geometry(
+            s(body.0),
+            s(body.1),
+            s(body.2).max(1),
+            s(body.3).max(1),
+        );
+        if let Ok(region) = smithay_client_toolkit::compositor::Region::new(compositor) {
+            region.add(s(body.0), s(body.1), s(body.2), s(body.3));
+            surface.set_input_region(Some(region.wl_region()));
+        }
+        surface.attach(Some(buffer.wl_buffer()), 0, 0);
+        surface.set_buffer_scale(scale as i32);
+        surface.damage_buffer(0, 0, bw as i32, bh as i32);
+        surface.commit();
+        self.buffer = Some(buffer);
+    }
+
+    /// The pointer's event on the popup's surface.
+    pub(super) fn pointer_event(
+        &mut self,
+        evt: &smithay_client_toolkit::seat::pointer::PointerEvent,
+    ) {
+        use crate::PopupEvent;
+        use smithay_client_toolkit::seat::pointer::PointerEventKind as Kind;
+        let scale = f64::from(self.scale.max(1));
+        let at = (
+            (evt.position.0 * scale) as isize,
+            (evt.position.1 * scale) as isize,
+        );
+        let button = |b: u32| match b {
+            // BTN_LEFT and friends, <linux/input-event-codes.h>
+            0x110 => Some(MousePress::Left),
+            0x111 => Some(MousePress::Right),
+            0x112 => Some(MousePress::Middle),
+            _ => None,
+        };
+        match evt.kind {
+            Kind::Enter { .. } | Kind::Motion { .. } => {
+                self.at = at;
+                self.inside = true;
+                (self.events)(PopupEvent::Motion(at.0, at.1));
+            }
+            Kind::Leave { .. } => {
+                if std::mem::take(&mut self.inside) {
+                    (self.events)(PopupEvent::Leave);
+                }
+            }
+            Kind::Press { button: b, .. } => {
+                if let Some(b) = button(b) {
+                    (self.events)(PopupEvent::Press(self.at.0, self.at.1, b));
+                }
+            }
+            Kind::Release { button: b, .. } => {
+                if let Some(b) = button(b) {
+                    (self.events)(PopupEvent::Release(self.at.0, self.at.1, b));
+                }
+            }
+            Kind::Axis { .. } => {}
+        }
+    }
 }
 
 impl WaylandWindowInner {
+    /// Whether `surface` is the window's own.
+    pub(super) fn is_surface(&self, surface: &WlSurface) -> bool {
+        self.window
+            .as_ref()
+            .is_some_and(|w| w.wl_surface().id() == surface.id())
+    }
+
+    fn show_popup(
+        &mut self,
+        at: Point,
+        image: crate::PopupImage,
+        mut events: Box<dyn FnMut(crate::PopupEvent) + Send>,
+    ) {
+        use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_positioner::{
+            Anchor, ConstraintAdjustment, Gravity,
+        };
+        use smithay_client_toolkit::shell::xdg::popup::Popup;
+        use smithay_client_toolkit::shell::xdg::XdgPositioner;
+
+        self.popup.take();
+        let Some(window) = self.window.as_ref() else {
+            events(crate::PopupEvent::Dismissed);
+            return;
+        };
+        let scale = SurfaceUserData::from_wl(self.surface())
+            .surface_data
+            .scale_factor()
+            .max(1);
+        let conn = WaylandConnection::get().unwrap().wayland();
+        let qh = conn.event_queue.borrow().handle();
+        let state = conn.wayland_state.borrow();
+        let s = |px: isize| (px / scale as isize) as i32;
+        let body = image.body;
+
+        let made = (|| -> anyhow::Result<Popup> {
+            let positioner = XdgPositioner::new(&state.xdg)?;
+            positioner.set_size(s(body.2 as isize).max(1), s(body.3 as isize).max(1));
+            positioner.set_anchor_rect(s(at.x), s(at.y), 1, 1);
+            positioner.set_anchor(Anchor::TopLeft);
+            positioner.set_gravity(Gravity::BottomRight);
+            positioner.set_constraint_adjustment(
+                ConstraintAdjustment::FlipX
+                    | ConstraintAdjustment::FlipY
+                    | ConstraintAdjustment::SlideX
+                    | ConstraintAdjustment::SlideY,
+            );
+            let surface = smithay_client_toolkit::compositor::Surface::new(&state.compositor, &qh)?;
+            Ok(Popup::from_surface(
+                Some(window.xdg_surface()),
+                &positioner,
+                &qh,
+                surface,
+                &state.xdg,
+            )?)
+        })();
+        let popup = match made {
+            Ok(popup) => popup,
+            Err(err) => {
+                log::error!("popup: {err:#}");
+                events(crate::PopupEvent::Dismissed);
+                return;
+            }
+        };
+        // the input's grab, asked with the press that led here (before
+        // the popup's first commit)
+        let serial = *state.last_press_serial.borrow();
+        let seat = state.pointer.as_ref().and_then(|p| {
+            p.pointer()
+                .data::<PointerUserData>()
+                .map(|d| d.pdata.seat().clone())
+        });
+        let grabbed = match (seat, serial, std::env::var_os("WEZTERM_POPUP_NO_GRAB")) {
+            (Some(seat), serial, None) if serial != 0 => {
+                popup.xdg_popup().grab(&seat, serial);
+                true
+            }
+            _ => false,
+        };
+        popup.wl_surface().commit();
+        self.popup = Some(WaylandPopup {
+            popup,
+            image,
+            events,
+            buffer: None,
+            scale,
+            configured: false,
+            grabbed,
+            since: Instant::now(),
+            inside: false,
+            at: (0, 0),
+        });
+    }
+
+    fn update_popup(&mut self, image: crate::PopupImage) {
+        let conn = WaylandConnection::get().unwrap().wayland();
+        let state = conn.wayland_state.borrow();
+        if let Some(popup) = self.popup.as_mut() {
+            popup.image = image;
+            popup.draw(&mut state.mem_pool.borrow_mut(), &state.compositor);
+        }
+    }
+
+    fn close_popup(&mut self) {
+        self.popup.take();
+    }
+
     /// Paints the edge for the content's size and the last configure's
     /// state, or takes it away when the window is not restored.
     fn update_edge(&mut self) {

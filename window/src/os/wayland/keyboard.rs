@@ -21,6 +21,36 @@ impl Dispatch<WlKeyboard, KeyboardData> for WaylandState {
         _qhandle: &wayland_client::QueueHandle<WaylandState>,
     ) {
         log::trace!("We reached an event here: {:?}???", event);
+        if let WlKeyboardEvent::Key {
+            serial,
+            state:
+                wayland_client::WEnum::Value(wayland_client::protocol::wl_keyboard::KeyState::Pressed),
+            ..
+        } = &event
+        {
+            *state.last_press_serial.borrow_mut() = *serial;
+        }
+        // a popup that grabbed the input has the keyboard's focus while it
+        // shows; its window hears the keys, and of no change of focus
+        if let WlKeyboardEvent::Enter {
+            surface, serial, ..
+        }
+        | WlKeyboardEvent::Leave { surface, serial } = &event
+        {
+            let to_or_from_popup = state.windows.borrow().values().any(|w| {
+                let inner = w.borrow();
+                inner.popup.as_ref().is_some_and(|p| {
+                    p.grabbed
+                        && (p.popup.wl_surface().id() == surface.id()
+                            || (matches!(event, WlKeyboardEvent::Leave { .. })
+                                && inner.is_surface(surface)))
+                })
+            });
+            if to_or_from_popup {
+                *state.last_serial.borrow_mut() = *serial;
+                return;
+            }
+        }
         match &event {
             WlKeyboardEvent::Enter {
                 serial, surface, ..

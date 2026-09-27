@@ -18,8 +18,10 @@
 //!   (gfx::ShadowValue::MakeMdShadowValues): black at 0x3d, 12 below,
 //!   blurred by 48, and black at 0x1f, blurred by 24; a blur is a
 //!   Gaussian of sigma 0.57735 * blur / 2 + 0.5 (skia's
-//!   ConvertRadiusToSigma), and takes half its blur of room around the
-//!   menu (ShadowValue::GetMargin): 24, 12 above, 36 below
+//!   ConvertRadiusToSigma). Chrome gives it half its blur of room around
+//!   the menu (ShadowValue::GetMargin: 24, 12 above, 36 below), where a
+//!   Gaussian still has a fiftieth of the shadow and the picture's edge
+//!   showed as a line; here three sigmas, where nothing is left of it
 //!
 //! Without translucent windows (X11 with no compositing manager) the
 //! corners are square and there is no shadow
@@ -41,8 +43,10 @@ const SEPARATOR_THICKNESS: f32 = 1.;
 const CORNER_RADIUS: f32 = 12.;
 /// Offset below, blur, alpha: the key shadow and the ambient one.
 const SHADOWS: [(f32, f32, f32); 2] = [(12., 48., 61. / 255.), (0., 24., 31. / 255.)];
-/// Around the menu for its shadow: left, top, right, bottom.
-const SHADOW_MARGIN: (f32, f32, f32, f32) = (24., 12., 24., 36.);
+/// Around the menu for its shadow: left, top, right, bottom. Three
+/// sigmas of the wider shadow (its sigma 14.4), less its offset above and
+/// more below.
+const SHADOW_MARGIN: (f32, f32, f32, f32) = (44., 32., 44., 56.);
 
 /// The menu's colours, sRGB.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -111,15 +115,29 @@ fn shape(font: &Rc<LoadedFont>, text: &str, on_fonts: &OnFonts) -> (Vec<Glyph>, 
         let on_fonts = Arc::clone(on_fonts);
         move || on_fonts()
     };
-    let infos = match font.shape(
+    // (the first attempt fails when the fonts' fallback was worked out
+    // anew by it: "Font fallback recalculated", and the next succeeds)
+    let mut attempt = font.shape(
         text,
-        again,
+        again.clone(),
         |_| {},
         None,
         wezterm_bidi::Direction::LeftToRight,
         None,
         None,
-    ) {
+    );
+    if attempt.is_err() {
+        attempt = font.shape(
+            text,
+            again,
+            |_| {},
+            None,
+            wezterm_bidi::Direction::LeftToRight,
+            None,
+            None,
+        );
+    }
+    let infos = match attempt {
         Ok(infos) => infos,
         Err(err) => {
             log::error!("popup menu: shaping {text:?}: {err:#}");

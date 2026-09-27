@@ -18,6 +18,7 @@ use smithay_client_toolkit::reexports::protocols_wlr::output_management::v1::cli
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
 use smithay_client_toolkit::seat::pointer::ThemedPointer;
 use smithay_client_toolkit::seat::SeatState;
+use smithay_client_toolkit::shell::xdg::popup::{Popup, PopupConfigure, PopupHandler};
 use smithay_client_toolkit::shell::xdg::XdgShell;
 use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay_client_toolkit::shm::{Shm, ShmHandler};
@@ -57,6 +58,9 @@ pub(super) struct WaylandState {
 
     pub(super) active_surface_id: RefCell<Option<ObjectId>>,
     pub(super) last_serial: RefCell<u32>,
+    /// The serial of the last button or key press: what a popup asks its
+    /// grab with (xdg_popup.grab wants the event that made it pop up).
+    pub(super) last_press_serial: RefCell<u32>,
     pub(super) keyboard: Option<WlKeyboard>,
     pub(super) keyboard_mapper: Option<KeyboardWithFallback>,
     pub(super) key_repeat_delay: i32,
@@ -123,6 +127,7 @@ impl WaylandState {
             xdg: XdgShell::bind(globals, qh)?,
             active_surface_id: RefCell::new(None),
             last_serial: RefCell::new(0),
+            last_press_serial: RefCell::new(0),
             keyboard: None,
             keyboard_mapper: None,
             key_repeat_rate: 25,
@@ -195,6 +200,45 @@ delegate_pointer!(WaylandState, pointer: [PointerUserData]);
 
 delegate_xdg_shell!(WaylandState);
 delegate_xdg_window!(WaylandState);
+smithay_client_toolkit::delegate_xdg_popup!(WaylandState);
+
+impl PopupHandler for WaylandState {
+    fn configure(
+        &mut self,
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+        popup: &Popup,
+        _config: PopupConfigure,
+    ) {
+        // its first picture, now that it may have one
+        let windows = self.windows.borrow();
+        for window in windows.values() {
+            let mut inner = window.borrow_mut();
+            if let Some(shown) = inner.popup.as_mut().filter(|p| p.popup == *popup) {
+                shown.configured = true;
+                shown.draw(&mut self.mem_pool.borrow_mut(), &self.compositor);
+            }
+        }
+    }
+
+    fn done(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, popup: &Popup) {
+        // the compositor closed it: a press outside the application's
+        // windows, or a grab it did not give
+        let windows = self.windows.borrow();
+        for window in windows.values() {
+            let mut inner = window.borrow_mut();
+            if inner.popup.as_ref().is_some_and(|p| p.popup == *popup) {
+                if let Some(mut shown) = inner.popup.take() {
+                    log::debug!(
+                        "popup: dismissed by the compositor {:?} after it was asked for",
+                        shown.since.elapsed()
+                    );
+                    (shown.events)(crate::PopupEvent::Dismissed);
+                }
+            }
+        }
+    }
+}
 
 delegate_primary_selection!(WaylandState);
 
