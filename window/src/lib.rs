@@ -265,6 +265,18 @@ impl WindowEventSender {
 #[error("Graphics drivers lost context")]
 pub struct GraphicsDriversLostContext {}
 
+/// One line of a menu the system shows (`WindowOps::show_native_menu`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeMenuItem {
+    pub label: String,
+    /// Shown dimmed and not chosen when false.
+    pub enabled: bool,
+    /// A line between items, not an item.
+    pub separator: bool,
+    /// A heading: shown, not chosen.
+    pub header: bool,
+}
+
 #[async_trait(?Send)]
 pub trait WindowOps {
     /// Show a hidden window
@@ -320,6 +332,21 @@ pub trait WindowOps {
     /// Requests the windowing system to start resizing the window from
     /// `edge`, the pointer being at the last `set_window_drag_position`.
     fn request_drag_resize(&self, _edge: ResizeEdge) {}
+
+    /// Pops up the system's own menu at `coords` (the window's pixels),
+    /// where the system has one for the purpose: macOS, as Chrome's
+    /// context menus there (MenuRunnerImplMac; elsewhere Chrome draws its
+    /// own). `chosen` is then called with the chosen item's index in
+    /// `items`, or `None` when the menu was dismissed. `false`, and
+    /// nothing shown or called, where there is none.
+    fn show_native_menu(
+        &self,
+        _items: Vec<NativeMenuItem>,
+        _coords: Point,
+        _chosen: Box<dyn FnOnce(Option<usize>) + Send>,
+    ) -> bool {
+        false
+    }
 
     /// Puts the window beneath the others: a title bar's "lower" action
     /// (X11; Chrome's WindowEventFilterLinux::LowerWindow).

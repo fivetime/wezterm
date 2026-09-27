@@ -906,6 +906,35 @@ impl WindowOps for Window {
         });
     }
 
+    fn show_native_menu(
+        &self,
+        items: Vec<crate::NativeMenuItem>,
+        coords: Point,
+        chosen: Box<dyn FnOnce(Option<usize>) + Send>,
+    ) -> bool {
+        let window_id = self.id;
+        let view = self.ns_view as usize;
+        // (not `with_window_inner`: the menu runs its own event loop, and
+        // no borrow of the window may be held across it)
+        promise::spawn::spawn_into_main_thread(async move {
+            if Connection::get().unwrap().window_by_id(window_id).is_none() {
+                chosen(None);
+                return;
+            }
+            let (target, selected) = unsafe { popup_menu(view as id, &items, coords) };
+            // an item's action is sent when the menu has closed, which
+            // may be after it returned: the choice is read in a turn of
+            // the event loop of its own
+            promise::spawn::spawn(async move {
+                let tag: isize = unsafe { *(**target).get_ivar(POPUP_CHOSEN) };
+                chosen((tag >= 0 && selected).then_some(tag as usize));
+            })
+            .detach();
+        })
+        .detach();
+        true
+    }
+
     fn set_text_cursor_position(&self, cursor: Rect) {
         Connection::with_window_inner(self.id, move |inner| {
             inner.set_text_cursor_position(cursor);
@@ -2006,6 +2035,85 @@ impl Inner {
             Ok(TranslateStatus::NotDead)
         }
     }
+}
+
+const POPUP_TARGET_CLS_NAME: &str = "WezTermPopupMenuTarget";
+/// The chosen item's index, in the target of a popup menu's items (-1
+/// until one is chosen).
+const POPUP_CHOSEN: &str = "chosen";
+
+fn popup_target_class() -> &'static Class {
+    Class::get(POPUP_TARGET_CLS_NAME).unwrap_or_else(|| {
+        extern "C" fn chosen(this: &mut Object, _sel: Sel, sender: id) {
+            unsafe {
+                let tag: NSInteger = msg_send![sender, tag];
+                this.set_ivar(POPUP_CHOSEN, tag as isize);
+            }
+        }
+        let mut cls = ClassDecl::new(POPUP_TARGET_CLS_NAME, class!(NSObject))
+            .expect("Unable to register the popup menu's target class");
+        cls.add_ivar::<isize>(POPUP_CHOSEN);
+        unsafe {
+            cls.add_method(
+                sel!(weztermPopupChosen:),
+                chosen as extern "C" fn(&mut Object, Sel, id),
+            );
+        }
+        cls.register()
+    })
+}
+
+/// The system's menu of `items` at `coords` (the view's pixels), as
+/// Chrome's context menus on macOS (MenuRunnerImplMac: an NSMenu, popped
+/// up with popUpMenuPositioningItem:atLocation:inView:). Returns when the
+/// menu has closed: the items' target, which learns the chosen item's
+/// index, and whether an item was chosen.
+unsafe fn popup_menu(
+    view: id,
+    items: &[crate::NativeMenuItem],
+    coords: Point,
+) -> (StrongPtr, bool) {
+    let target: id = msg_send![popup_target_class(), new];
+    (*target).set_ivar(POPUP_CHOSEN, -1isize);
+    let target = StrongPtr::new(target);
+
+    let menu: id = msg_send![class!(NSMenu), alloc];
+    let menu = StrongPtr::new(msg_send![menu, initWithTitle: *nsstring("")]);
+    // the items say themselves whether they can be chosen
+    let () = msg_send![*menu, setAutoenablesItems: NO];
+    // a section's heading as the system draws it (macOS 14), a dimmed
+    // item before
+    let headers: BOOL =
+        msg_send![class!(NSMenuItem), respondsToSelector: sel!(sectionHeaderWithTitle:)];
+    for (idx, entry) in items.iter().enumerate() {
+        let item: id = if entry.separator {
+            msg_send![class!(NSMenuItem), separatorItem]
+        } else if entry.header && headers == YES {
+            msg_send![class!(NSMenuItem), sectionHeaderWithTitle: *nsstring(&entry.label)]
+        } else {
+            let item: id = msg_send![class!(NSMenuItem), alloc];
+            let item: id = msg_send![item,
+                initWithTitle: *nsstring(&entry.label)
+                action: sel!(weztermPopupChosen:)
+                keyEquivalent: *nsstring("")];
+            let () = msg_send![item, setTarget: *target];
+            let () = msg_send![item, setTag: idx as NSInteger];
+            let () = msg_send![item, setEnabled: to_yes_no(entry.enabled && !entry.header)];
+            msg_send![item, autorelease]
+        };
+        let () = msg_send![*menu, addItem: item];
+    }
+
+    // the view is flipped: its points are the window's pixels over the
+    // scale, from the top left
+    let window: id = msg_send![view, window];
+    let scale: CGFloat = msg_send![window, backingScaleFactor];
+    let at = NSPoint::new(coords.x as f64 / scale, coords.y as f64 / scale);
+    let selected: BOOL = msg_send![*menu,
+        popUpMenuPositioningItem: nil
+        atLocation: at
+        inView: view];
+    (target, selected == YES)
 }
 
 const VIEW_CLS_NAME: &str = "WezTermWindowView";

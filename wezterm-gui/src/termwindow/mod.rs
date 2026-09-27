@@ -2393,6 +2393,9 @@ impl TermWindow {
                 self.dimensions.pixel_height as f32 / 3.,
             ),
         };
+        if self.show_native_popup_menu(pane, args, at) {
+            return;
+        }
         match crate::termwindow::popupmenu::PopupMenu::new(
             args.clone(),
             MuxPane(pane.pane_id()),
@@ -2401,6 +2404,58 @@ impl TermWindow {
             Ok(menu) => self.set_modal(Rc::new(menu)),
             Err(err) => log::error!("PopupMenu: {err:#}"),
         }
+    }
+
+    /// The popup menu as the system's own, where the window has one to
+    /// show (macOS, as Chrome's context menus there): not held within the
+    /// window, as the one drawn here is. The choice goes to the action's
+    /// callback the same way. Whether it was shown.
+    fn show_native_popup_menu(
+        &mut self,
+        pane: &Arc<dyn Pane>,
+        args: &config::keyassignment::PopupMenu,
+        at: (f32, f32),
+    ) -> bool {
+        let event_name = match *args.action {
+            KeyAssignment::EmitEvent(ref id) => id.to_string(),
+            _ => return false,
+        };
+        let Some(window) = self.window.clone() else {
+            return false;
+        };
+        let items = args
+            .choices
+            .iter()
+            .map(|c| ::window::NativeMenuItem {
+                label: c.label.clone(),
+                enabled: c.enabled,
+                separator: c.separator,
+                header: c.header,
+            })
+            .collect();
+        let choices = args.choices.clone();
+        let pane = MuxPane(pane.pane_id());
+        let notified = window.clone();
+        window.show_native_menu(
+            items,
+            ::window::Point::new(at.0 as isize, at.1 as isize),
+            Box::new(move |chosen| {
+                notified.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+                    // a button still held when the menu opened was
+                    // released to the menu, not to the window
+                    term_window.current_mouse_buttons.clear();
+                    term_window.current_mouse_capture = None;
+                    let entry = chosen.and_then(|idx| choices.get(idx)).map(|c| {
+                        config::keyassignment::InputSelectorEntry {
+                            label: c.label.clone(),
+                            id: c.id.clone(),
+                        }
+                    });
+                    let window = GuiWin::new(term_window);
+                    crate::overlay::selector::trampoline(event_name, window, pane, entry);
+                })));
+            }),
+        )
     }
 
     fn show_prompt_input_line(&mut self, args: &PromptInputLine) {

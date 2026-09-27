@@ -222,6 +222,14 @@ zoom showed 3-4 sizes with the screen still for a third of a second;
 now 15-16 in 345 ms (a plain AppKit window: 19), measured on the screen
 (NativeTerm's docs/ROADMAP.md, 2026-09-27).
 
+The tab's menu (a right click): on macOS the system's own menu, as
+Chrome's context menus there (MenuRunnerImplMac: an NSMenu, popped up
+with popUpMenuPositioningItem:atLocation:inView:), so it reaches beyond
+the window and looks and behaves as the system's menus do; without the
+icons, which are nerdfont glyphs. Elsewhere Chrome draws its own menu in
+a window of its own (MenuHost); here it is still drawn within the window
+(`PopupMenu`), cut off where the window is smaller than the menu.
+
 Text: `text.gtk_font_name_parse` (the desktop font at Chrome's
 whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
 (ceiled ascent, descent and cap height).
