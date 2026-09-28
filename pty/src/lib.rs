@@ -103,6 +103,19 @@ pub trait MasterPty: Downcast + Send {
     /// It is invalid to take the writer more than once.
     fn take_writer(&self) -> Result<Box<dyn std::io::Write + Send>, Error>;
 
+    /// The terminal clears its screen itself (not the program in it):
+    /// a pty that keeps a picture of the screen of its own (Windows'
+    /// ConPTY) clears that too, or what the program writes next goes
+    /// where the cursor was. `Ok(true)`: it did, and the whole of it,
+    /// the cursor at the screen's start (ConPTY keeps no row, whatever
+    /// it is asked, and writes nothing to the terminal about it): the
+    /// terminal's is to be cleared the same way. `Ok(false)`: the pty
+    /// keeps none (a Unix pty), or can't be told (the system's own
+    /// ConPTY, which has no such call).
+    fn clear_screen(&self) -> Result<bool, Error> {
+        Ok(false)
+    }
+
     /// If applicable to the type of the tty, return the local process id
     /// of the process group or session leader
     #[cfg(unix)]

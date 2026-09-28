@@ -748,14 +748,28 @@ impl TerminalState {
         self.cursor.y = 0;
     }
 
+    /// Discards the scrollback and everything in the viewport, the
+    /// cursor at the screen's start: what a pty that keeps a screen of
+    /// its own (ConPTY) does when it is told to clear, so that the two
+    /// stay the same.
+    pub fn erase_scrollback_and_screen(&mut self) {
+        self.increment_seqno();
+        self.erase_in_display(EraseInDisplay::EraseScrollback);
+        self.erase_in_display(EraseInDisplay::EraseDisplay);
+        self.set_cursor_position_absolute(0, 0);
+    }
+
     /// Discards the scrollback, leaving only the data that is present
-    /// in the viewport.
+    /// in the viewport. The scrollback is the primary screen's: while a
+    /// program has the alternate one, what scrolled away before it took
+    /// it is what is discarded (the alternate screen has none, and
+    /// asking it discarded nothing).
     pub fn erase_scrollback(&mut self) {
         // Since we may be called outside of perform_actions,
         // we need to ensure that we increment the seqno in
         // order to correctly invalidate the display
         self.increment_seqno();
-        self.screen_mut().erase_scrollback();
+        self.screen.screen.erase_scrollback();
     }
 
     /// Returns true if the associated application has enabled any of the

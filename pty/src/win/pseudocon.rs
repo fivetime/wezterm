@@ -40,6 +40,24 @@ shared_library!(ConPtyFuncs,
     pub fn ClosePseudoConsole(hpc: HPCON),
 );
 
+// What only the sideloaded conpty.dll has (Windows Terminal's "clear
+// buffer" is this call): the console's buffer cleared. `keep_cursor_row`
+// (since Terminal 1.22; before, the call took the handle alone, and the
+// second argument is one nobody reads) changes nothing that a program
+// sees: measured with the bundled 1.22 (`pty/examples/clear_probe.rs`),
+// with 0 and with 1 the cursor is at the buffer's start afterwards, and
+// nothing is written to the terminal.
+shared_library!(ConPtyClearFuncs,
+    pub fn ConptyClearPseudoConsole(hpc: HPCON, keep_cursor_row: i32) -> HRESULT,
+);
+
+fn load_conpty_clear() -> Option<ConPtyClearFuncs> {
+    // (the same library the console was made with, or none: a handle of
+    // the system's ConPTY is nothing the sideloaded one knows)
+    ConPtyFuncs::open(Path::new("conpty.dll")).ok()?;
+    ConPtyClearFuncs::open(Path::new("conpty.dll")).ok()
+}
+
 fn load_conpty() -> ConPtyFuncs {
     // If the kernel doesn't export these functions then their system is
     // too old and we cannot run.
@@ -59,6 +77,7 @@ fn load_conpty() -> ConPtyFuncs {
 
 lazy_static! {
     static ref CONPTY: ConPtyFuncs = load_conpty();
+    static ref CONPTY_CLEAR: Option<ConPtyClearFuncs> = load_conpty_clear();
 }
 
 pub struct PseudoCon {
@@ -94,6 +113,21 @@ impl PseudoCon {
             result
         );
         Ok(Self { con })
+    }
+
+    /// Clears the console's own buffer, the cursor then at its start;
+    /// false where this ConPTY has no call for it.
+    pub fn clear(&self) -> Result<bool, Error> {
+        let Some(funcs) = CONPTY_CLEAR.as_ref() else {
+            return Ok(false);
+        };
+        let result = unsafe { (funcs.ConptyClearPseudoConsole)(self.con, 0) };
+        ensure!(
+            result == S_OK,
+            "failed to clear the console: HRESULT: {}",
+            result
+        );
+        Ok(true)
     }
 
     pub fn resize(&self, size: COORD) -> Result<(), Error> {

@@ -293,6 +293,22 @@ the application the active one and takes the window out of the Dock.
 Not what `PaneFocused` is, which a new tab and a click in a split are
 too. Wayland has no `focus()` (it would take an activation token).
 
+The screen cleared by the terminal (`ClearScrollback
+"ScrollbackAndViewport"`), on Windows: ConPTY keeps a picture of the
+screen of its own, and a program's output goes where ConPTY's cursor
+is, so clearing the terminal's alone left the next output some rows
+down. `MasterPty::clear_screen` tells a pty that has such a picture:
+ConPTY's `ConptyClearPseudoConsole` (the sideloaded conpty.dll's; the
+system's has none), which clears all of it, the cursor at the start,
+whatever its `keepCursorRow` says, and writes nothing to the terminal
+(measured with the bundled 1.22: `cargo run -p portable-pty --example
+clear_probe`). Where the pty did, the terminal clears all of its own
+too (`erase_scrollback_and_screen`) and keeps no row; elsewhere as
+before, the cursor's row kept as the first. `ClearScrollback
+"ScrollbackOnly"` discards the primary screen's scrollback whichever
+screen is shown: while a program had the alternate one it discarded
+nothing.
+
 Text: `text.gtk_font_name_parse` (the desktop font at Chrome's
 whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
 (ceiled ascent, descent and cap height).

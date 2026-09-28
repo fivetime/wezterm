@@ -92,6 +92,10 @@ impl MasterPty for ConPtyMasterPty {
         Ok(inner.size.clone())
     }
 
+    fn clear_screen(&self) -> Result<bool, Error> {
+        self.inner.lock().unwrap().con.clear()
+    }
+
     fn try_clone_reader(&self) -> anyhow::Result<Box<dyn std::io::Read + Send>> {
         Ok(Box::new(self.inner.lock().unwrap().readable.try_clone()?))
     }

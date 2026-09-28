@@ -520,7 +520,20 @@ impl Pane for LocalPane {
                 self.terminal.lock().erase_scrollback();
             }
             ScrollbackEraseMode::ScrollbackAndViewport => {
-                self.terminal.lock().erase_scrollback_and_viewport();
+                // the pty's own picture of the screen, where it keeps
+                // one (ConPTY), is cleared too, or the program's next
+                // output goes where the cursor was before; it keeps
+                // no row, so neither does the terminal then
+                let cleared = self.pty.lock().clear_screen().unwrap_or_else(|err| {
+                    log::error!("clearing the pty's screen: {err:#}");
+                    false
+                });
+                let mut terminal = self.terminal.lock();
+                if cleared {
+                    terminal.erase_scrollback_and_screen();
+                } else {
+                    terminal.erase_scrollback_and_viewport();
+                }
             }
         }
     }
