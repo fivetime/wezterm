@@ -291,7 +291,29 @@ the front by the GUI that shows it (`window.focus()`), which upstream's
 CLI never did. Windows restores a minimized window first; macOS makes
 the application the active one and takes the window out of the Dock.
 Not what `PaneFocused` is, which a new tab and a click in a split are
-too. Wayland has no `focus()` (it would take an activation token).
+too.
+
+On Wayland a window comes forward only with an activation token
+(xdg-activation-v1), which the compositor gives the program that has
+the person's input. The fork does as Chromium does
+(`ui/ozone/platform/wayland/host/xdg_activation.cc`,
+`base/nix/xdg_util.cc`, `wayland_toplevel_window.cc`;
+`window/src/os/wayland/activation.rs`): one token kept for the process,
+from `XDG_ACTIVATION_TOKEN` at start (taken out of the environment, so
+that no program started from the GUI inherits it), or handed on by the
+cli: `activate-pane` and `activate-tab` send the token in their own
+environment first (`SetActivationToken`, which the GUI turns into
+`MuxNotification::ActivationToken`), then `SetFocusedPane`.
+`window.focus()` activates the window's surface with the token; a
+window not configured yet takes it at its first configure (Chromium's
+pending token). Without a token nothing is asked (a line in the debug
+log). The token must be asked with the serial of the press that
+started the pointer's grab (mutter honours `pointer->grab_serial`
+only): NativeTerm, which asks, carries a patched winit for that.
+Tried on Zorin OS 18 (GNOME 46): a new GUI and a GUI behind NativeTerm
+both came forward, no badge on the dock icon; on Fedora 44 (GNOME 50)
+and EndeavourOS (KDE Plasma, KWin) the same, NativeTerm's surface
+losing the keyboard to it each time (protocol log).
 
 The screen cleared by the terminal (`ClearScrollback
 "ScrollbackAndViewport"`), on Windows: ConPTY keeps a picture of the

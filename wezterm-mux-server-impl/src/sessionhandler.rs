@@ -328,6 +328,18 @@ impl SessionHandler {
                 }
                 send_response(Ok(Pdu::UnitResponse(UnitResponse {})))
             }
+            Pdu::SetActivationToken(SetActivationToken { token }) => {
+                spawn_into_main_thread(async move {
+                    catch(
+                        move || {
+                            Mux::get().notify(mux::MuxNotification::ActivationToken(token));
+                            Ok(Pdu::UnitResponse(UnitResponse {}))
+                        },
+                        send_response,
+                    );
+                })
+                .detach();
+            }
             Pdu::SetFocusedPane(SetFocusedPane { pane_id }) => {
                 let client_id = self.client_id.clone();
                 spawn_into_main_thread(async move {

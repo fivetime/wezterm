@@ -393,6 +393,15 @@ impl WaylandWindow {
 
 #[async_trait(?Send)]
 impl WindowOps for WaylandWindow {
+    /// To the front, with the activation token handed to this process
+    /// (see activation.rs): Wayland has nothing else.
+    fn focus(&self) {
+        WaylandConnection::with_window_inner(self.0, |inner| {
+            inner.activate();
+            Ok(())
+        });
+    }
+
     fn show(&self) {
         WaylandConnection::with_window_inner(self.0, |inner| {
             inner.show();
@@ -1516,6 +1525,10 @@ impl WaylandWindowInner {
             if let Some(notify) = self.pending_first_configure.take() {
                 // Allow window creation to complete
                 notify.try_send(()).ok();
+                // a token waiting for the window to be configured
+                if let Some(token) = super::activation::take_activation_token() {
+                    self.activate_with(token);
+                }
             }
         }
     }
@@ -1836,6 +1849,30 @@ impl WaylandWindowInner {
     fn maximize(&mut self) {
         if let Some(window) = self.window.as_mut() {
             window.set_maximized();
+        }
+    }
+
+    /// To the front with the token there is; a window not configured yet
+    /// takes it when it is (as Chromium's pending configure token).
+    fn activate(&mut self) {
+        if self.pending_first_configure.is_some() {
+            return;
+        }
+        match super::activation::take_activation_token() {
+            Some(token) => self.activate_with(token),
+            None => log::debug!("a window asked to come forward without an activation token"),
+        }
+    }
+
+    fn activate_with(&self, token: String) {
+        let conn = WaylandConnection::get().unwrap().wayland();
+        let state = conn.wayland_state.borrow();
+        match &state.activation {
+            Some(activation) => {
+                log::debug!("activated with a token");
+                activation.activate::<WaylandState>(self.surface(), token)
+            }
+            None => log::debug!("the compositor has no xdg-activation"),
         }
     }
 

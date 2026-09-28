@@ -149,6 +149,7 @@ impl ActivateTab {
                 anyhow::anyhow!("could not determine which pane should be active for tab {tab_id}")
             })?;
 
+        super::activate_pane::hand_on_activation_token(&client).await;
         client
             .set_focused_pane_id(codec::SetFocusedPane {
                 pane_id: target_pane,

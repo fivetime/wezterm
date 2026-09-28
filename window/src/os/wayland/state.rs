@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use smithay_client_toolkit::activation::ActivationState;
 use smithay_client_toolkit::compositor::{CompositorState, SurfaceData};
 use smithay_client_toolkit::data_device_manager::data_device::DataDevice;
 use smithay_client_toolkit::data_device_manager::data_source::CopyPasteSource;
@@ -54,6 +55,8 @@ pub(super) struct WaylandState {
     pub(super) output_manager: Option<OutputManagerState>,
     pub(super) seat: SeatState,
     pub(super) xdg: XdgShell,
+    /// xdg-activation-v1, where the compositor has it (see activation.rs).
+    pub(super) activation: Option<ActivationState>,
     pub(super) windows: RefCell<HashMap<usize, Rc<RefCell<WaylandWindowInner>>>>,
 
     pub(super) active_surface_id: RefCell<Option<ObjectId>>,
@@ -125,6 +128,7 @@ impl WaylandState {
             windows: RefCell::new(HashMap::new()),
             seat: SeatState::new(globals, qh),
             xdg: XdgShell::bind(globals, qh)?,
+            activation: ActivationState::bind(globals, qh).ok(),
             active_surface_id: RefCell::new(None),
             last_serial: RefCell::new(0),
             last_press_serial: RefCell::new(0),

@@ -29,6 +29,7 @@ pub struct WaylandConnection {
 
 impl WaylandConnection {
     pub(crate) fn create_new() -> anyhow::Result<Self> {
+        super::activation::token_from_env();
         let conn = WConnection::connect_to_env()?;
         let (globals, event_queue) = registry_queue_init::<WaylandState>(&conn)?;
         let qh = event_queue.handle();

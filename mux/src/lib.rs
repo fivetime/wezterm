@@ -87,6 +87,10 @@ pub enum MuxNotification {
     /// it to the front. Not what a pane focused in the window itself is
     /// (`PaneFocused`, which a new tab is too).
     WindowWanted(WindowId),
+    /// What the window wanted next is brought forward with where the
+    /// windowing system asks for it (a Wayland activation token), handed
+    /// on by the program that asks (`wezterm cli`, from its environment).
+    ActivationToken(String),
     TabResized(TabId),
     TabTitleChanged {
         tab_id: TabId,

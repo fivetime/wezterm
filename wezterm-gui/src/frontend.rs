@@ -86,6 +86,15 @@ impl GuiFrontEnd {
                     })
                     .detach();
                 }
+                MuxNotification::ActivationToken(token) => {
+                    log::debug!("an activation token was handed on");
+                    // (Wayland only: elsewhere a window is brought forward
+                    // without one)
+                    #[cfg(all(unix, not(target_os = "macos"), feature = "wayland"))]
+                    window::os::wayland::set_activation_token(token);
+                    #[cfg(not(all(unix, not(target_os = "macos"), feature = "wayland")))]
+                    let _ = token;
+                }
                 MuxNotification::WindowWanted(mux_window_id) => {
                     promise::spawn::spawn_into_main_thread(async move {
                         let fe = crate::frontend::front_end();

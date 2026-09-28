@@ -503,6 +503,7 @@ pdu! {
     GetPaneDirection: 60,
     GetPaneDirectionResponse: 61,
     AdjustPaneSize: 62,
+    SetActivationToken: 63,
 }
 
 impl Pdu {
@@ -840,6 +841,13 @@ pub struct SetClientId {
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct SetFocusedPane {
     pub pane_id: PaneId,
+}
+
+/// A Wayland activation token for the window a `SetFocusedPane` after it
+/// brings forward (the asking program's, from `XDG_ACTIVATION_TOKEN`).
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct SetActivationToken {
+    pub token: String,
 }
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
