@@ -82,6 +82,11 @@ pub enum MuxNotification {
         window_id: WindowId,
     },
     PaneFocused(PaneId),
+    /// A client asked for a pane of this window (`wezterm cli
+    /// activate-pane`, `activate-tab`): whoever shows the window brings
+    /// it to the front. Not what a pane focused in the window itself is
+    /// (`PaneFocused`, which a new tab is too).
+    WindowWanted(WindowId),
     TabResized(TabId),
     TabTitleChanged {
         tab_id: TabId,

@@ -86,6 +86,15 @@ impl GuiFrontEnd {
                     })
                     .detach();
                 }
+                MuxNotification::WindowWanted(mux_window_id) => {
+                    promise::spawn::spawn_into_main_thread(async move {
+                        let fe = crate::frontend::front_end();
+                        if let Some(win) = fe.gui_window_for_mux_window(mux_window_id) {
+                            win.window.focus();
+                        }
+                    })
+                    .detach();
+                }
                 MuxNotification::TabTitleChanged { .. } => {}
                 MuxNotification::WindowTitleChanged { .. } => {}
                 MuxNotification::TabResized(_) => {}

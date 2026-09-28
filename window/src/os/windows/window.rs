@@ -845,6 +845,11 @@ impl WindowOps for Window {
                     std::mem::size_of::<INPUT>() as i32,
                 );
 
+                // (a minimized window would be the foreground one and
+                // not be seen)
+                if IsIconic(handle) != 0 {
+                    ShowWindow(handle, SW_RESTORE);
+                }
                 SetForegroundWindow(handle);
             }
         })

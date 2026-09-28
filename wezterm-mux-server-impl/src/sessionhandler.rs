@@ -363,6 +363,7 @@ impl SessionHandler {
 
                             mux.record_focus_for_current_identity(pane_id);
                             mux.notify(mux::MuxNotification::PaneFocused(pane_id));
+                            mux.notify(mux::MuxNotification::WindowWanted(window_id));
 
                             Ok(Pdu::UnitResponse(UnitResponse {}))
                         },

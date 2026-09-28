@@ -127,6 +127,9 @@ where
                 handler.schedule_pane_push(pane_id);
             }
             Ok(Item::Notif(MuxNotification::SaveToDownloads { .. })) => {}
+            // (for the process that shows the window, which is this one
+            // or none)
+            Ok(Item::Notif(MuxNotification::WindowWanted(_))) => {}
             Ok(Item::Notif(MuxNotification::AssignClipboard {
                 pane_id,
                 selection,

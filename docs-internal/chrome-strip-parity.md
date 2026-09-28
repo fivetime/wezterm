@@ -284,6 +284,15 @@ are a regular expression of the text taken literally between `\b`.
 The pane enters no mode and no keys are taken, as WezTerm's search
 overlay does: the match is the pane's selection.
 
+A window asked for from outside (`MuxNotification::WindowWanted`): a
+pane a client sets as the focused one (`wezterm cli activate-pane`,
+`activate-tab`: both send `SetFocusedPane`) has its window brought to
+the front by the GUI that shows it (`window.focus()`), which upstream's
+CLI never did. Windows restores a minimized window first; macOS makes
+the application the active one and takes the window out of the Dock.
+Not what `PaneFocused` is, which a new tab and a click in a split are
+too. Wayland has no `focus()` (it would take an activation token).
+
 Text: `text.gtk_font_name_parse` (the desktop font at Chrome's
 whole-pixel size, sent by NativeTerm), `text.font_metrics_linux`
 (ceiled ascent, descent and cap height).

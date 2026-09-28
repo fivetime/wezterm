@@ -1387,6 +1387,15 @@ impl WindowInner {
 
     fn focus(&mut self) {
         unsafe {
+            // (asked for from outside, another application is the active
+            // one: a window of an application that is not comes in front
+            // of its own windows only)
+            let app: id = msg_send![class!(NSApplication), sharedApplication];
+            let () = msg_send![app, activateIgnoringOtherApps: YES];
+            let minimized: BOOL = msg_send![*self.window, isMiniaturized];
+            if minimized == YES {
+                let () = msg_send![*self.window, deminiaturize: nil];
+            }
             self.window.makeKeyAndOrderFront_(nil);
         }
     }
