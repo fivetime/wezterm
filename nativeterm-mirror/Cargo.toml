@@ -21,6 +21,8 @@ tungstenite = { version = "0.30", default-features = false, features = ["handsha
 wezterm-term.workspace = true
 
 [dev-dependencies]
+# the pairing secret in examples/serve.rs
+getrandom.workspace = true
 tempfile.workspace = true
 # NativeTerm's relay, run in a test (tests/through_relay.rs)
 native-term-server = { path = "../../NativeTerm/crates/native-term-server" }
