@@ -6,7 +6,7 @@
 //! all, as over a WebSocket. The device then closes the connection it
 //! offered on.
 
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::SocketAddr;
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
@@ -16,8 +16,6 @@ use crate::server::{handshake, not_paired, session, Got, Link, NotPaired, Shared
 
 /// How long the device has to open the channel after the answer.
 const OPEN_WITHIN: Duration = Duration::from_secs(20);
-/// The relay's STUN port (`nativeterm-server --stun`).
-const STUN_PORT: u16 = 3478;
 
 /// A data channel as a connection to a device.
 struct Direct {
@@ -101,45 +99,9 @@ fn serve(shared: &Arc<Shared>, mut peer: Peer) -> anyhow::Result<()> {
 
 /// The STUN servers to ask: the person's relay's, when there is one.
 fn stun_servers(state: &State) -> Vec<SocketAddr> {
-    let Some(host) = state.relay.as_ref().and_then(|r| relay_host(&r.url)) else {
-        return Vec::new();
-    };
-    (host.as_str(), STUN_PORT)
-        .to_socket_addrs()
-        .map(|a| a.collect())
+    state
+        .relay
+        .as_ref()
+        .map(|r| native_term_p2p::relay_stun(&r.url))
         .unwrap_or_default()
-}
-
-/// The host in `wss://host[:port][/...]` (an IPv6 one without brackets).
-fn relay_host(url: &str) -> Option<String> {
-    let rest = url.split_once("://").map_or(url, |(_, r)| r);
-    let authority = rest.split('/').next()?;
-    let host = if let Some(v6) = authority.strip_prefix('[') {
-        v6.split(']').next()?
-    } else {
-        authority.split(':').next()?
-    };
-    (!host.is_empty()).then(|| host.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::relay_host;
-
-    #[test]
-    fn the_relay_host() {
-        assert_eq!(
-            relay_host("wss://relay.example.com").as_deref(),
-            Some("relay.example.com")
-        );
-        assert_eq!(
-            relay_host("ws://10.0.0.2:8443/x").as_deref(),
-            Some("10.0.0.2")
-        );
-        assert_eq!(
-            relay_host("wss://[2001:db8::1]:443").as_deref(),
-            Some("2001:db8::1")
-        );
-        assert_eq!(relay_host("wss://"), None);
-    }
 }
