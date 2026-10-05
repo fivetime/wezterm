@@ -128,6 +128,29 @@ fn turn_server(state: &State, stun: &[SocketAddr]) -> Option<native_term_p2p::Tu
     })
 }
 
+/// The relay's TURN for a device (named in its `Welcome`), with
+/// short-lived credentials made from the relay's token.
+pub(crate) fn device_turn(
+    relay: &crate::server::RelaySettings,
+) -> Option<native_term_remote::proto::TurnServer> {
+    let urls = native_term_p2p::relay_turn_urls(&relay.url);
+    if urls.is_empty() {
+        return None;
+    }
+    let expires = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs()
+        + TURN_VALID.as_secs();
+    let (username, password) =
+        native_term_remote::turn::credentials(&relay.token, &relay.room, expires);
+    Some(native_term_remote::proto::TurnServer {
+        urls,
+        username,
+        password,
+    })
+}
+
 /// The STUN servers to ask: the person's relay's, when there is one.
 fn stun_servers(state: &State) -> Vec<SocketAddr> {
     state
