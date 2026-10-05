@@ -252,6 +252,17 @@ fn compute_tab_title(
                     title = format!("{}{classic_spacing}", title);
                 }
 
+                // NativeTerm: a tab open to remote control carries a mark
+                if nativeterm_mirror::server::is_open(pane.pane_id) {
+                    let mark = "\u{25cf} ".to_string();
+                    len += unicode_column_width(&mark, None);
+                    items.push(FormatItem::Foreground(FormatColor::AnsiColor(
+                        AnsiColor::Red,
+                    )));
+                    items.push(FormatItem::Text(mark));
+                    items.push(FormatItem::Foreground(FormatColor::Default));
+                }
+
                 match pane.progress {
                     Progress::None => {}
                     Progress::Percentage(pct) | Progress::Error(pct) => {

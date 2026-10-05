@@ -134,6 +134,43 @@ impl Shared {
     }
 }
 
+/// The service, once started (for `is_open`).
+static SERVING: std::sync::OnceLock<Arc<Shared>> = std::sync::OnceLock::new();
+
+/// Whether the pane is open to remote control now: its tab carries a
+/// mark in the tab strip while it is.
+pub fn is_open(pane: PaneId) -> bool {
+    SERVING
+        .get()
+        .is_some_and(|shared| shared.state().sessions.contains(&pane))
+}
+
+/// The tabs whose panes were opened or closed to remote control are told
+/// to draw their titles again (their mark comes or goes).
+fn watch_marks(shared: Arc<Shared>) {
+    let mut before: HashSet<PaneId> = HashSet::new();
+    loop {
+        let now: HashSet<PaneId> = shared.state().sessions.iter().copied().collect();
+        if now != before {
+            if let Some(mux) = Mux::try_get() {
+                for pane in now.symmetric_difference(&before) {
+                    if let Some(tab) = mux
+                        .resolve_pane_id(*pane)
+                        .and_then(|(_, _, tab)| mux.get_tab(tab))
+                    {
+                        Mux::notify_from_any_thread(MuxNotification::TabTitleChanged {
+                            tab_id: tab.tab_id(),
+                            title: tab.get_title(),
+                        });
+                    }
+                }
+            }
+            before = now;
+        }
+        std::thread::sleep(Duration::from_millis(300));
+    }
+}
+
 /// Start serving, when NativeTerm asked for it (`dir` holds its state).
 /// Returns at once; the work is on threads of its own.
 pub fn start(dir: PathBuf) {
@@ -170,6 +207,13 @@ fn serve(dir: PathBuf) -> anyhow::Result<()> {
         std::thread::Builder::new()
             .name("nativeterm-relay".into())
             .spawn(move || crate::relay::run(shared))?;
+    }
+    let _ = SERVING.set(Arc::clone(&shared));
+    {
+        let shared = Arc::clone(&shared);
+        std::thread::Builder::new()
+            .name("nativeterm-marks".into())
+            .spawn(move || watch_marks(shared))?;
     }
     let watcher = Arc::clone(&shared);
     if let Some(mux) = Mux::try_get() {
@@ -281,8 +325,22 @@ pub(crate) fn not_paired<S: Read + Write>(mut ws: Ws<S>) -> anyhow::Result<()> {
         reason: "not paired".into(),
     };
     let _ = ws.close(Some(frame));
-    // the close goes out before the socket does
+    // the close goes out before the socket does, and the device's answer
+    // is read: a connection dropped with unread data is reset, and the
+    // reset can throw the close (and its code) away on the way
     let _ = ws.flush();
+    let until = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < until {
+        match ws.read() {
+            Ok(_) => {}
+            Err(tungstenite::Error::Io(e))
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => break,
+        }
+    }
     Ok(())
 }
 
