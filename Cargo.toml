@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "chrome-strip",
+  "nativeterm-mirror",
   "bidi",
   "bidi/generate",
   "strip-ansi-escapes",
@@ -249,6 +250,10 @@ wezterm-char-props = { path = "wezterm-char-props", default-features=false }
 wezterm-client = { path = "wezterm-client" }
 wezterm-color-types = { version="0.3", path = "color-types", default-features=false }
 chrome-strip = { path = "chrome-strip" }
+# NativeTerm's remote control: the protocol core lives in NativeTerm's
+# repository, beside this one (both checked out side by side)
+native-term-remote = { path = "../NativeTerm/crates/native-term-remote" }
+nativeterm-mirror = { path = "nativeterm-mirror" }
 wezterm-config-derive = { version="0.1", path="config/derive" }
 wezterm-dynamic = { version = "0.2.1", path = "wezterm-dynamic", default-features=false }
 wezterm-dynamic-derive = { version="0.1.1", path="wezterm-dynamic/derive" }

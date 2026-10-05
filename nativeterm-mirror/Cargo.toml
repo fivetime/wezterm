@@ -1,0 +1,13 @@
+[package]
+name = "nativeterm-mirror"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "NativeTerm's remote control: a pane's screen kept as native-term-remote's Mirror, read through the mux"
+
+[dependencies]
+mux.workspace = true
+native-term-remote.workspace = true
+rangeset.workspace = true
+termwiz.workspace = true
+wezterm-term.workspace = true
