@@ -874,7 +874,16 @@ pub(crate) fn session<L: Link>(
                 if let Some(frame) = channel.open(&b)?.and_then(|bytes| wire::decode(&bytes)) {
                     match frame.body {
                         Some(Body::Hello(hello)) => {
-                            let answer = wire::answer(&hello);
+                            let mut answer = wire::answer(&hello);
+                            // the relay's STUN, for the device's offer
+                            if let Some(Body::Welcome(welcome)) = &mut answer.body {
+                                welcome.stun = shared
+                                    .state()
+                                    .relay
+                                    .and_then(|r| native_term_p2p::relay_stun_name(&r.url))
+                                    .into_iter()
+                                    .collect();
+                            }
                             let refused = matches!(answer.body, Some(Body::Refused(_)));
                             send(&mut ws, &mut channel, &answer)?;
                             anyhow::ensure!(!refused, "no common version");
