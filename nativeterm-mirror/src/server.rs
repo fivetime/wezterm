@@ -77,6 +77,10 @@ struct Shared {
     generation: AtomicU64,
     mirrors: Mutex<HashMap<PaneId, PaneMirror>>,
     state: Mutex<(Option<SystemTime>, State)>,
+    /// Pairing secrets a device paired with: each pairs one device only.
+    /// (Claimed when a pairing succeeds, not when one starts: anyone on
+    /// the network may start one, and must not use the code up.)
+    used: Mutex<HashSet<String>>,
 }
 
 impl Shared {
@@ -133,6 +137,7 @@ fn serve(dir: PathBuf) -> anyhow::Result<()> {
         generation: AtomicU64::new(0),
         mirrors: Mutex::new(HashMap::new()),
         state: Mutex::new((None, State::default())),
+        used: Mutex::new(HashSet::new()),
     });
     // NativeTerm writes the port first; wait for it
     let port = loop {
@@ -313,12 +318,18 @@ fn binary(ws: &mut Ws) -> anyhow::Result<Vec<u8>> {
 /// Pairing (with the one-time secret NativeTerm put in the QR code) or
 /// resuming (a paired device); the channel and the device's key.
 fn handshake(shared: &Shared, ws: &mut Ws, pairing: bool) -> anyhow::Result<(Channel, [u8; 32])> {
+    let mut secret_hex = None;
     let mut hs = if pairing {
         let state = shared.state();
         let pairing = state
             .pairing
             .ok_or_else(|| anyhow::anyhow!("no pairing asked for"))?;
         anyhow::ensure!(pairing.expires > now(), "the pairing expired");
+        anyhow::ensure!(
+            !shared.used.lock().unwrap().contains(&pairing.secret),
+            "the pairing code was used"
+        );
+        secret_hex = Some(pairing.secret.clone());
         let secret: [u8; 32] = unhex(&pairing.secret)
             .and_then(|s| s.try_into().ok())
             .ok_or_else(|| anyhow::anyhow!("the pairing's secret is not one"))?;
@@ -338,7 +349,12 @@ fn handshake(shared: &Shared, ws: &mut Ws, pairing: bool) -> anyhow::Result<(Cha
         }
     }
     let (channel, device) = hs.channel()?;
-    if pairing {
+    if let Some(secret) = secret_hex {
+        // one device per code, whichever finished first
+        anyhow::ensure!(
+            shared.used.lock().unwrap().insert(secret),
+            "the pairing code was used"
+        );
         record(shared, &device, "")?;
     }
     Ok((channel, device))

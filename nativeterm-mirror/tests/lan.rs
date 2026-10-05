@@ -149,6 +149,27 @@ fn pairing_resuming_and_revoking_over_loopback() {
     assert!(text.contains("\"my phone\""), "{text}");
     drop(socket);
 
+    // the code pairs one device only
+    let mut socket = ws(port, "/ws/pair");
+    let second = Keys::generate().unwrap();
+    if let Some(mut channel) = shake(
+        &mut socket,
+        Handshake::pair_device(&second, &ticket).unwrap(),
+    ) {
+        let _ = channel
+            .seal(&wire::encode(&wire::hello("second")))
+            .map(|ms| {
+                for m in ms {
+                    let _ = socket.send(Message::Binary(m.into()));
+                }
+            });
+        assert!(receive(&mut socket, &mut channel).is_none(), "no Welcome");
+    }
+    let second_record = dir
+        .join("devices")
+        .join(format!("{}.json", hex(&second.public)));
+    assert!(!second_record.exists());
+
     // a wrong secret does not pair. The secret is checked in the device's
     // last handshake message, so the device finishes its side; the desktop
     // refuses that message: no Welcome comes, and nothing is recorded.
