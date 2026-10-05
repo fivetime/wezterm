@@ -228,9 +228,42 @@ fn connection(shared: &Shared, stream: TcpStream) -> anyhow::Result<()> {
         _ => anyhow::bail!("no such place: {path}"),
     };
     let mut ws = tungstenite::accept(stream)?;
-    let (channel, device) = handshake(shared, &mut ws, pairing)?;
+    let (channel, device) = match handshake(shared, &mut ws, pairing) {
+        Ok(done) => done,
+        Err(e) if e.is::<NotPaired>() => return not_paired(ws),
+        Err(e) => return Err(e),
+    };
     ws.get_ref().set_read_timeout(Some(TICK))?;
-    session(shared, ws, channel, device, pairing)
+    match session(shared, ws, channel, device, pairing) {
+        Err(e) if e.is::<NotPaired>() => Ok(()),
+        other => other,
+    }
+}
+
+/// A device this desktop does not know (never paired, or removed): it is
+/// told so (`CLOSE_NOT_PAIRED`), and stops trying.
+#[derive(Debug)]
+struct NotPaired;
+
+impl std::fmt::Display for NotPaired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("not a paired device")
+    }
+}
+
+impl std::error::Error for NotPaired {}
+
+fn not_paired(mut ws: Ws) -> anyhow::Result<()> {
+    use tungstenite::protocol::frame::coding::CloseCode;
+    use tungstenite::protocol::CloseFrame;
+    let frame = CloseFrame {
+        code: CloseCode::from(wire::CLOSE_NOT_PAIRED),
+        reason: "not paired".into(),
+    };
+    let _ = ws.close(Some(frame));
+    // the close goes out before the socket does
+    let _ = ws.flush();
+    Ok(())
 }
 
 /// The request's path and whether it asks for a WebSocket, read without
@@ -348,7 +381,9 @@ fn handshake(shared: &Shared, ws: &mut Ws, pairing: bool) -> anyhow::Result<(Cha
             hs.read(&binary(ws)?)?;
             // resuming: who it is is known after the first message
             if let (false, Some(key)) = (pairing, hs.remote_key()) {
-                anyhow::ensure!(shared.paired(&key), "not a paired device");
+                if !shared.paired(&key) {
+                    return Err(NotPaired.into());
+                }
             }
         }
     }
@@ -511,8 +546,11 @@ fn session(
             Err(e) => return Err(e.into()),
         }
         anyhow::ensure!(last_heard.elapsed() < SILENCE, "silent too long");
-        // a device whose pairing was taken away goes at once
-        anyhow::ensure!(shared.paired(&device), "the pairing was revoked");
+        // a device whose pairing was taken away goes at once, told so
+        if !shared.paired(&device) {
+            not_paired(ws)?;
+            return Err(NotPaired.into());
+        }
         if !welcomed {
             continue;
         }

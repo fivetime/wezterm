@@ -58,6 +58,15 @@ fn binary(ws: &mut Ws) -> Option<Vec<u8>> {
     }
 }
 
+/// The close code the desktop ends with, skipping what comes before.
+fn closed_with(ws: &mut Ws) -> Option<u16> {
+    loop {
+        if let Message::Close(frame) = ws.read().ok()? {
+            return frame.map(|f| u16::from(f.code));
+        }
+    }
+}
+
 /// The device's side of a handshake; `None` when the desktop hangs up.
 fn shake(ws: &mut Ws, mut hs: Handshake) -> Option<Channel> {
     while !hs.finished() {
@@ -211,11 +220,15 @@ fn pairing_resuming_and_revoking_over_loopback() {
     ));
     let mut other = ws(port, "/ws/resume");
     let stranger = Keys::generate().unwrap();
-    assert!(shake(
-        &mut other,
-        Handshake::resume_device(&stranger, &desktop.public).unwrap()
-    )
-    .is_none());
+    let mut hs = Handshake::resume_device(&stranger, &desktop.public).unwrap();
+    other
+        .send(Message::Binary(hs.write().unwrap().into()))
+        .unwrap();
+    assert_eq!(
+        closed_with(&mut other),
+        Some(wire::CLOSE_NOT_PAIRED),
+        "a stranger is told it is not paired"
+    );
 
     // revoked (NativeTerm removes the file): the open connection ends
     let _ = receive(&mut socket, &mut channel); // the sessions list
@@ -248,7 +261,11 @@ fn pairing_resuming_and_revoking_over_loopback() {
     assert!(!log.contains("hunter2"));
     std::fs::remove_file(&record).unwrap();
     let start = Instant::now();
-    assert!(receive(&mut socket, &mut channel).is_none(), "cut off");
+    assert_eq!(
+        closed_with(&mut socket),
+        Some(wire::CLOSE_NOT_PAIRED),
+        "cut off, told so"
+    );
     assert!(start.elapsed() < Duration::from_secs(3));
 
     // an expired pairing does not pair
