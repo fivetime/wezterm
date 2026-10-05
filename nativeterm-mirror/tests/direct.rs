@@ -154,7 +154,7 @@ fn a_device_moves_onto_a_data_channel() {
     // the offer, in the session; the answer back in it
     let started = Instant::now();
     let addresses = ["127.0.0.1".parse().unwrap()];
-    let (offering, sdp) = native_term_p2p::offer(&addresses, &[]).unwrap();
+    let (offering, sdp) = native_term_p2p::offer(&addresses, &[], &[]).unwrap();
     send(
         &mut socket,
         &mut channel,

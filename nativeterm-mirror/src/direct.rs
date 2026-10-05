@@ -70,7 +70,7 @@ pub(crate) fn answer(shared: &Arc<Shared>, offer: String) -> mpsc::Receiver<Stri
                 None => native_term_p2p::own_addresses(),
             };
             let turn = turn_server(&state, &stun);
-            match native_term_p2p::answer(&offer, &addresses, &stun, turn.as_ref()) {
+            match native_term_p2p::answer(&offer, &addresses, &stun, turn.as_slice()) {
                 Ok((peer, sdp)) => {
                     let _ = tx.send(sdp);
                     if let Err(e) = serve(&shared, peer) {
@@ -125,6 +125,7 @@ fn turn_server(state: &State, stun: &[SocketAddr]) -> Option<native_term_p2p::Tu
         username,
         password,
         only: state.relay_only,
+        via: native_term_p2p::TurnVia::Udp,
     })
 }
 
