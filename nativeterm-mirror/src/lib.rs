@@ -9,6 +9,7 @@
 //! palette as the desktop draws them) and gives them to the mirror, which
 //! numbers what changed for the devices.
 
+mod direct;
 pub mod input;
 mod relay;
 pub mod server;

@@ -253,6 +253,7 @@ chrome-strip = { path = "chrome-strip" }
 # NativeTerm's remote control: the protocol core lives in NativeTerm's
 # repository, beside this one (both checked out side by side)
 native-term-remote = { path = "../NativeTerm/crates/native-term-remote" }
+native-term-p2p = { path = "../NativeTerm/crates/native-term-p2p" }
 nativeterm-mirror = { path = "nativeterm-mirror" }
 wezterm-config-derive = { version="0.1", path="config/derive" }
 wezterm-dynamic = { version = "0.2.1", path = "wezterm-dynamic", default-features=false }

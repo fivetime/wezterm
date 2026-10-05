@@ -87,7 +87,12 @@ fn control(shared: &Arc<Shared>, relay: &RelaySettings) -> anyhow::Result<()> {
 }
 
 /// One device through the relay: the data connection, then as on the LAN.
-fn device(shared: &Shared, relay: &RelaySettings, conn: &str, pairing: bool) -> anyhow::Result<()> {
+fn device(
+    shared: &Arc<Shared>,
+    relay: &RelaySettings,
+    conn: &str,
+    pairing: bool,
+) -> anyhow::Result<()> {
     let mut ws = open(relay, &format!("/desktop/{}/{conn}", relay.room))?;
     let (channel, device) = match handshake(shared, &mut ws, pairing) {
         Ok(done) => done,

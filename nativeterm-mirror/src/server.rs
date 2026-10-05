@@ -25,8 +25,8 @@ use mux::pane::PaneId;
 use mux::{Mux, MuxNotification};
 use native_term_remote::noise::{Channel, Handshake, Keys};
 use native_term_remote::proto::{
-    ended, frame::Body, input_result::Reason, Ended, Frame, Heartbeat, InputResult, SessionInfo,
-    Sessions,
+    ended, frame::Body, input_result::Reason, DirectAnswer, Ended, Frame, Heartbeat, InputResult,
+    SessionInfo, Sessions,
 };
 use native_term_remote::screen::Since;
 use native_term_remote::wire;
@@ -185,7 +185,7 @@ pub struct Connection {
     /// The device's key, in hex.
     pub device: String,
     pub name: String,
-    /// `lan` or `relay`.
+    /// `lan`, `relay` or `direct`.
     pub via: &'static str,
     /// Seconds since the epoch.
     pub since: u64,
@@ -479,7 +479,7 @@ fn unhex(text: &str) -> Option<Vec<u8>> {
 }
 
 /// One connection: a file of the web client, or a device.
-fn connection(shared: &Shared, stream: TcpStream) -> anyhow::Result<()> {
+fn connection(shared: &Arc<Shared>, stream: TcpStream) -> anyhow::Result<()> {
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     let (path, websocket) = peek_request(&stream)?;
@@ -783,7 +783,7 @@ fn apply_input(
 
 /// A device after the handshake: what it asks, and what changes.
 pub(crate) fn session<L: Link>(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     mut ws: L,
     mut channel: Channel,
     device: [u8; 32],
@@ -828,7 +828,23 @@ pub(crate) fn session<L: Link>(
     let mut every = TICK;
     let mut viewer = shared.role(&device) == Role::View;
     let mut rows_sent = Instant::now() - FRAME;
+    // a direct connection offered: its answer, while it is being made
+    let mut direct: Option<std::sync::mpsc::Receiver<String>> = None;
     loop {
+        if let Some(answer) = direct.as_ref().map(|r| r.try_recv()) {
+            match answer {
+                Ok(sdp) => {
+                    send(
+                        &mut ws,
+                        &mut channel,
+                        &wire::frame(Body::DirectAnswer(DirectAnswer { sdp })),
+                    )?;
+                    direct = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => direct = None,
+            }
+        }
         let want = if Instant::now() < busy_until {
             QUICK
         } else {
@@ -907,6 +923,9 @@ pub(crate) fn session<L: Link>(
                                     hold_size(pane, h.cols, h.lines);
                                 }
                             }
+                        }
+                        Some(Body::DirectOffer(offer)) if welcomed && direct.is_none() => {
+                            direct = Some(crate::direct::answer(shared, offer.sdp));
                         }
                         Some(Body::Input(input)) if welcomed => {
                             busy_until = Instant::now() + BUSY;
