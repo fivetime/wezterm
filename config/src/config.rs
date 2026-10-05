@@ -537,6 +537,12 @@ pub struct Config {
     #[dynamic(default)]
     pub show_tab_hover_cards: bool,
 
+    /// NativeTerm's remote control: the folder of NativeTerm's that says
+    /// what is open and holds the desktop's key (see nativeterm-mirror's
+    /// `server`); set, the GUI serves the panes opened there on the LAN.
+    #[dynamic(default)]
+    pub nativeterm_remote_dir: Option<String>,
+
     /// A picture (SVG, PNG, ...) drawn before every tab's title in the
     /// Chrome tab strip, as Chrome draws a page's favicon there: 16 DIP.
     #[dynamic(default)]

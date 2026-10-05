@@ -3,11 +3,21 @@ name = "nativeterm-mirror"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "NativeTerm's remote control: a pane's screen kept as native-term-remote's Mirror, read through the mux"
+description = "NativeTerm's remote control: a pane's screen kept as native-term-remote's Mirror, read through the mux, and served on the LAN"
 
 [dependencies]
+anyhow.workspace = true
+httparse = "1.10"
+log.workspace = true
 mux.workspace = true
 native-term-remote.workspace = true
 rangeset.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 termwiz.workspace = true
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 wezterm-term.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+

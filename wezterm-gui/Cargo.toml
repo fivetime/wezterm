@@ -48,6 +48,7 @@ downcast-rs.workspace = true
 emojis.workspace = true
 env-bootstrap.workspace = true
 chrome-strip.workspace = true
+nativeterm-mirror.workspace = true
 euclid.workspace = true
 fastrand.workspace = true
 filedescriptor.workspace = true

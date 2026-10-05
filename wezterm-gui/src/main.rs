@@ -684,6 +684,10 @@ fn setup_mux(
     let client_id = Arc::new(mux::client::ClientId::new());
     mux.register_client(client_id.clone());
     mux.replace_identity(Some(client_id));
+    // NativeTerm's remote control, when NativeTerm asked for it
+    if let Some(dir) = config.nativeterm_remote_dir.as_ref() {
+        nativeterm_mirror::server::start(dir.into());
+    }
     let default_workspace_name = default_workspace_name.unwrap_or(
         config
             .default_workspace
