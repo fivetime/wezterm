@@ -3,7 +3,9 @@
 //! channel; this desktop answers with its own candidates (its addresses,
 //! and the public one the person's relay sees, by STUN), and once the
 //! channel opens the device resumes a session over it, the handshake and
-//! all, as over a WebSocket. The device then closes the connection it
+//! all, as over a WebSocket. Where no direct path goes, the relayed
+//! address the person's server gives this desktop (TURN) is one more
+//! candidate. The device then closes the connection it
 //! offered on.
 
 use std::net::SocketAddr;
@@ -14,6 +16,9 @@ use native_term_p2p::{Peer, Received};
 
 use crate::server::{handshake, not_paired, session, Got, Link, NotPaired, Shared, State};
 
+/// How long a relayed address's credentials hold (a connection through
+/// it longer than this ends, and the device comes back).
+const TURN_VALID: Duration = Duration::from_secs(24 * 3600);
 /// How long the device has to open the channel after the answer.
 const OPEN_WITHIN: Duration = Duration::from_secs(20);
 
@@ -64,7 +69,8 @@ pub(crate) fn answer(shared: &Arc<Shared>, offer: String) -> mpsc::Receiver<Stri
                 Some(ip) => vec![ip],
                 None => native_term_p2p::own_addresses(),
             };
-            match native_term_p2p::answer(&offer, &addresses, &stun) {
+            let turn = turn_server(&state, &stun);
+            match native_term_p2p::answer(&offer, &addresses, &stun, turn.as_ref()) {
                 Ok((peer, sdp)) => {
                     let _ = tx.send(sdp);
                     if let Err(e) = serve(&shared, peer) {
@@ -99,6 +105,27 @@ fn serve(shared: &Arc<Shared>, mut peer: Peer) -> anyhow::Result<()> {
         Err(e) if e.is::<NotPaired>() => Ok(()),
         other => other,
     }
+}
+
+/// The person's relay as a TURN server (the same port as its STUN), with
+/// short-lived credentials made from its token: a relayed address for
+/// devices no direct path reaches.
+fn turn_server(state: &State, stun: &[SocketAddr]) -> Option<native_term_p2p::Turn> {
+    let relay = state.relay.as_ref()?;
+    let server = *stun.first()?;
+    let expires = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs()
+        + TURN_VALID.as_secs();
+    let (username, password) =
+        native_term_remote::turn::credentials(&relay.token, &relay.room, expires);
+    Some(native_term_p2p::Turn {
+        server,
+        username,
+        password,
+        only: state.relay_only,
+    })
 }
 
 /// The STUN servers to ask: the person's relay's, when there is one.

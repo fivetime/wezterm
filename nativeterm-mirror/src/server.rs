@@ -169,6 +169,11 @@ pub struct State {
     /// about); none: every address the machine has.
     #[serde(default)]
     pub listen: Option<std::net::IpAddr>,
+    /// A direct connection through the relay's TURN alone: this
+    /// machine's addresses are not given to devices (WebRTC's "relay"
+    /// policy).
+    #[serde(default)]
+    pub relay_only: bool,
 }
 
 /// What a paired device may do: see only, or see and type. Chosen with
