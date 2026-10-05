@@ -3971,6 +3971,7 @@ dependencies = [
  "prost-build",
  "protox",
  "snow",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -4014,6 +4015,7 @@ dependencies = [
  "mux",
  "native-term-remote",
  "native-term-server",
+ "promise",
  "rangeset",
  "serde",
  "serde_json",
