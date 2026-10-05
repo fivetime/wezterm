@@ -95,7 +95,7 @@ fn device(shared: &Shared, relay: &RelaySettings, conn: &str, pairing: bool) -> 
         Err(e) => return Err(e),
     };
     timeout(&ws, Some(TICK))?;
-    match session(shared, ws, channel, device, pairing) {
+    match session(shared, ws, channel, device, pairing, "relay") {
         Err(e) if e.is::<NotPaired>() => Ok(()),
         other => other,
     }

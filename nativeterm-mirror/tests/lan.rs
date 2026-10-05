@@ -218,6 +218,56 @@ fn pairing_resuming_and_revoking_over_loopback() {
         receive(&mut socket, &mut channel),
         Some(Body::Welcome(_))
     ));
+
+    // the same phone again (a second page): two connections listed; the
+    // desktop disconnects the second, which is told so (4002); the first
+    // stays
+    let mut page = ws(port, "/ws/resume");
+    let mut page_channel = shake(
+        &mut page,
+        Handshake::resume_device(&phone, &desktop.public).unwrap(),
+    )
+    .expect("resumed again");
+    send(&mut page, &mut page_channel, &wire::hello("my phone (web)"));
+    assert!(matches!(
+        receive(&mut page, &mut page_channel),
+        Some(Body::Welcome(_))
+    ));
+    // (the list is written just after the welcome goes)
+    let listed_as = |n: usize| -> Vec<serde_json::Value> {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            let text = std::fs::read_to_string(dir.join("connections.json")).unwrap_or_default();
+            let list: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap_or_default();
+            if list.len() == n || Instant::now() > deadline {
+                return list;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let listed = listed_as(2);
+    assert_eq!(listed.len(), 2, "{listed:?}");
+    assert_eq!(listed[1]["name"], "my phone (web)");
+    assert_eq!(listed[1]["via"], "lan");
+    assert_eq!(listed[1]["device"], hex(&phone.public));
+    let second = listed[1]["id"].as_u64().unwrap();
+    let web = dir.join("web").display().to_string().replace('\\', "/");
+    std::fs::write(
+        dir.join("state.json"),
+        format!(
+            r#"{{"port": {port}, "sessions": [], "pairing": {{"secret": "{}", "expires": {later}}}, "web": "{web}", "disconnect": [{second}]}}"#,
+            hex(&secret)
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        closed_with(&mut page),
+        Some(wire::CLOSE_DISCONNECTED),
+        "disconnected, told so"
+    );
+    let listed = listed_as(1);
+    assert_eq!(listed.len(), 1, "the first stays: {listed:?}");
+
     let mut other = ws(port, "/ws/resume");
     let stranger = Keys::generate().unwrap();
     let mut hs = Handshake::resume_device(&stranger, &desktop.public).unwrap();

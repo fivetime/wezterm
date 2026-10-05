@@ -78,6 +78,32 @@ pub struct State {
     /// directly.
     #[serde(default)]
     pub relay: Option<RelaySettings>,
+    /// Connections (`connections.json`'s ids) the desktop disconnected:
+    /// closed with `CLOSE_DISCONNECTED`.
+    #[serde(default)]
+    pub disconnect: Vec<u64>,
+    /// Devices (keys in hex) kept from typing: they see, their input is
+    /// refused as read only.
+    #[serde(default)]
+    pub no_input: Vec<String>,
+}
+
+/// A connection now, as `connections.json` lists it for NativeTerm.
+#[derive(Clone, Debug, Serialize)]
+pub struct Connection {
+    /// Unique across this desktop's runs.
+    pub id: u64,
+    /// The device's key, in hex.
+    pub device: String,
+    pub name: String,
+    /// `lan` or `relay`.
+    pub via: &'static str,
+    /// Seconds since the epoch.
+    pub since: u64,
+    /// When it last typed, if it did.
+    pub typed: Option<u64>,
+    /// The sessions (pane ids) it watches.
+    pub watching: Vec<PaneId>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -116,9 +142,38 @@ pub(crate) struct Shared {
     /// (Claimed when a pairing succeeds, not when one starts: anyone on
     /// the network may start one, and must not use the code up.)
     used: Mutex<HashSet<String>>,
+    /// The connections now (after their welcome), for `connections.json`.
+    connections: Mutex<HashMap<u64, Connection>>,
+    /// A connection's id: this run's start, then a count.
+    next_connection: AtomicU64,
 }
 
 impl Shared {
+    /// `connections.json` written again (whole, then renamed into place).
+    fn write_connections(&self) {
+        let list: Vec<Connection> = {
+            let mut all: Vec<Connection> =
+                self.connections.lock().unwrap().values().cloned().collect();
+            all.sort_by_key(|c| c.id);
+            all
+        };
+        let path = self.dir.join("connections.json");
+        let temp = self.dir.join("connections.json.new");
+        let written = serde_json::to_vec_pretty(&list)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| std::fs::write(&temp, bytes))
+            .and_then(|()| std::fs::rename(&temp, &path));
+        if let Err(e) = written {
+            log::debug!("nativeterm remote control: connections.json: {e}");
+        }
+    }
+
+    fn connection_changed(&self, id: u64, change: impl FnOnce(&mut Connection)) {
+        if let Some(c) = self.connections.lock().unwrap().get_mut(&id) {
+            change(c);
+        }
+        self.write_connections();
+    }
     /// `state.json` as it is now (read again when it changed).
     pub(crate) fn state(&self) -> State {
         let path = self.dir.join("state.json");
@@ -210,7 +265,11 @@ fn serve(dir: PathBuf) -> anyhow::Result<()> {
         mirrors: Mutex::new(HashMap::new()),
         state: Mutex::new((None, State::default())),
         used: Mutex::new(HashSet::new()),
+        connections: Mutex::new(HashMap::new()),
+        next_connection: AtomicU64::new(now() * 1000),
     });
+    // none yet (a list left by the run before is not true now)
+    shared.write_connections();
     // NativeTerm writes the port first; wait for it
     let port = loop {
         let port = shared.state().port;
@@ -315,7 +374,7 @@ fn connection(shared: &Shared, stream: TcpStream) -> anyhow::Result<()> {
         Err(e) => return Err(e),
     };
     ws.get_ref().set_read_timeout(Some(TICK))?;
-    match session(shared, ws, channel, device, pairing) {
+    match session(shared, ws, channel, device, pairing, "lan") {
         Err(e) if e.is::<NotPaired>() => Ok(()),
         other => other,
     }
@@ -335,11 +394,18 @@ impl std::fmt::Display for NotPaired {
 impl std::error::Error for NotPaired {}
 
 pub(crate) fn not_paired<S: Read + Write>(mut ws: Ws<S>) -> anyhow::Result<()> {
+    close_with(&mut ws, wire::CLOSE_NOT_PAIRED, "not paired");
+    Ok(())
+}
+
+/// Close with `code`; the device's answer read before the connection
+/// goes.
+fn close_with<S: Read + Write>(ws: &mut Ws<S>, code: u16, reason: &str) {
     use tungstenite::protocol::frame::coding::CloseCode;
     use tungstenite::protocol::CloseFrame;
     let frame = CloseFrame {
-        code: CloseCode::from(wire::CLOSE_NOT_PAIRED),
-        reason: "not paired".into(),
+        code: CloseCode::from(code),
+        reason: reason.to_string().into(),
     };
     let _ = ws.close(Some(frame));
     // the close goes out before the socket does, and the device's answer
@@ -358,7 +424,6 @@ pub(crate) fn not_paired<S: Read + Write>(mut ws: Ws<S>) -> anyhow::Result<()> {
             Err(_) => break,
         }
     }
-    Ok(())
 }
 
 /// The request's path and whether it asks for a WebSocket, read without
@@ -553,6 +618,7 @@ fn sessions(state: &State) -> Frame {
 fn apply_input(
     shared: &Shared,
     device: &[u8; 32],
+    connection: u64,
     input: &native_term_remote::proto::Input,
 ) -> Reason {
     let Some(kind) = &input.kind else {
@@ -566,10 +632,11 @@ fn apply_input(
     let reason = match (pane, pane_id) {
         (None, _) => Reason::NoSession,
         (Some(_), Some(id)) if state.read_only.contains(&id) => Reason::ReadOnly,
+        (Some(_), _) if state.no_input.contains(&hex(device)) => Reason::ReadOnly,
         (Some(pane), _) => crate::input::apply(&*pane, kind),
     };
-    // the device by the start of its key, as NativeTerm's list shows it
-    let who = hex(&device[..4]);
+    // the device by the start of its key, and which of its connections
+    let who = format!("{} #{connection}", hex(&device[..4]));
     crate::input::record(&shared.dir, &who, &input.session, kind, reason);
     reason
 }
@@ -581,7 +648,19 @@ pub(crate) fn session<S: Read + Write + Wait>(
     mut channel: Channel,
     device: [u8; 32],
     paired_now: bool,
+    via: &'static str,
 ) -> anyhow::Result<()> {
+    let id = shared.next_connection.fetch_add(1, Ordering::Relaxed);
+    // listed from its welcome until it ends, however it ends
+    struct Listed<'a>(&'a Shared, u64);
+    impl Drop for Listed<'_> {
+        fn drop(&mut self) {
+            if self.0.connections.lock().unwrap().remove(&self.1).is_some() {
+                self.0.write_connections();
+            }
+        }
+    }
+    let _listed = Listed(shared, id);
     // subscribed panes, and the screen number each was sent up to
     let mut watching: HashMap<PaneId, u64> = HashMap::new();
     let mut seen_generation = u64::MAX;
@@ -616,6 +695,19 @@ pub(crate) fn session<S: Read + Write + Wait>(
                             if paired_now {
                                 record(shared, &device, &hello.device_name)?;
                             }
+                            shared.connections.lock().unwrap().insert(
+                                id,
+                                Connection {
+                                    id,
+                                    device: hex(&device),
+                                    name: hello.device_name.clone(),
+                                    via,
+                                    since: now(),
+                                    typed: None,
+                                    watching: Vec::new(),
+                                },
+                            );
+                            shared.write_connections();
                             let state = shared.state();
                             open = state.sessions.iter().copied().collect();
                             send(&mut ws, &mut channel, &sessions(&state))?;
@@ -630,11 +722,26 @@ pub(crate) fn session<S: Read + Write + Wait>(
                             {
                                 watching.insert(pane, s.since);
                                 seen_generation = u64::MAX;
+                                let panes: Vec<PaneId> = watching.keys().copied().collect();
+                                shared.connection_changed(id, |c| c.watching = panes);
                             }
                         }
                         Some(Body::Input(input)) if welcomed => {
                             busy_until = Instant::now() + BUSY;
-                            let reason = apply_input(shared, &device, &input);
+                            let reason = apply_input(shared, &device, id, &input);
+                            if reason == Reason::Applied {
+                                // (written at most once a second while typing)
+                                let at = now();
+                                let stale = shared
+                                    .connections
+                                    .lock()
+                                    .unwrap()
+                                    .get(&id)
+                                    .is_some_and(|c| c.typed != Some(at));
+                                if stale {
+                                    shared.connection_changed(id, |c| c.typed = Some(at));
+                                }
+                            }
                             let result = InputResult {
                                 session: input.session,
                                 id: input.id,
@@ -671,6 +778,15 @@ pub(crate) fn session<S: Read + Write + Wait>(
         }
         // the sessions open now; one closed (or turned off) ends
         let state = shared.state();
+        // disconnected by the desktop: told so, and not coming back by itself
+        if state.disconnect.contains(&id) {
+            close_with(
+                &mut ws,
+                wire::CLOSE_DISCONNECTED,
+                "disconnected by the desktop",
+            );
+            return Ok(());
+        }
         let now_open: HashSet<PaneId> = state.sessions.iter().copied().collect();
         if now_open != open {
             for gone in open.difference(&now_open) {
