@@ -14,7 +14,8 @@ use mux::pane::Pane;
 use native_term_remote::keys;
 use native_term_remote::proto::input::Kind;
 use native_term_remote::proto::input_result::Reason;
-use wezterm_term::{KeyCode, KeyModifiers};
+use native_term_remote::proto::mouse::{Button, Kind as MouseKind};
+use wezterm_term::{KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 /// WezTerm's key for a protocol name; `None` for one it does not know.
 pub fn key_code(name: &str) -> Option<KeyCode> {
@@ -78,6 +79,29 @@ pub fn apply(pane: &dyn Pane, kind: &Kind) -> Reason {
             Some(code) => pane.key_down(code, modifiers(key.mods)),
             None => return Reason::UnknownKey,
         },
+        // only for a program that asked for it: else the device scrolls
+        // and selects on its own
+        Kind::Mouse(mouse) if pane.is_mouse_grabbed() => pane.mouse_event(MouseEvent {
+            kind: match mouse.kind() {
+                MouseKind::Press => MouseEventKind::Press,
+                MouseKind::Release => MouseEventKind::Release,
+                MouseKind::Move => MouseEventKind::Move,
+            },
+            x: mouse.col as usize,
+            y: mouse.row as i64,
+            x_pixel_offset: 0,
+            y_pixel_offset: 0,
+            button: match mouse.button() {
+                Button::None => MouseButton::None,
+                Button::Left => MouseButton::Left,
+                Button::Middle => MouseButton::Middle,
+                Button::Right => MouseButton::Right,
+                Button::WheelUp => MouseButton::WheelUp(1),
+                Button::WheelDown => MouseButton::WheelDown(1),
+            },
+            modifiers: modifiers(mouse.mods),
+        }),
+        Kind::Mouse(_) => Ok(()),
     };
     if let Err(e) = done {
         log::debug!("nativeterm remote control: input: {e:#}");
@@ -90,6 +114,13 @@ pub fn describe(kind: &Kind) -> String {
     match kind {
         Kind::Text(text) => format!("text, {} characters", text.chars().count()),
         Kind::Paste(text) => format!("paste, {} characters", text.chars().count()),
+        Kind::Mouse(m) => format!(
+            "mouse {:?} {:?} at {},{}",
+            m.kind(),
+            m.button(),
+            m.row,
+            m.col
+        ),
         Kind::Key(key) => {
             let mut name = String::new();
             for (bit, label) in [

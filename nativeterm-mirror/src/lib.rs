@@ -33,6 +33,10 @@ pub trait Source {
     fn cursor(&mut self) -> StableCursorPosition;
     fn title(&mut self) -> String;
     fn alternate(&mut self) -> bool;
+    /// The program asked for the mouse.
+    fn mouse(&mut self) -> bool {
+        false
+    }
     fn seqno(&mut self) -> SequenceNo;
     fn changed_since(
         &mut self,
@@ -61,6 +65,10 @@ impl Source for PaneSource<'_> {
 
     fn alternate(&mut self) -> bool {
         self.0.is_alt_screen_active()
+    }
+
+    fn mouse(&mut self) -> bool {
+        self.0.is_mouse_grabbed()
     }
 
     fn seqno(&mut self) -> SequenceNo {
@@ -145,6 +153,7 @@ impl PaneMirror {
                 ScreenKind::ScreenNormal
             },
             rows,
+            mouse: source.mouse(),
         };
         self.seqno = Some(now);
         self.shape = Some(shape);
