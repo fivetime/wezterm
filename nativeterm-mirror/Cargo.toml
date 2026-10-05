@@ -15,9 +15,12 @@ rangeset.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 termwiz.workspace = true
-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "native-tls"] }
 wezterm-term.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# NativeTerm's relay, run in a test (tests/through_relay.rs)
+native-term-server = { path = "../../NativeTerm/crates/native-term-server" }
+tokio = { version = "1", features = ["rt-multi-thread", "net"] }
 

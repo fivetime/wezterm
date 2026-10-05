@@ -57,6 +57,20 @@ pub struct State {
     /// Panes open to be seen only: input to them is refused.
     #[serde(default)]
     pub read_only: Vec<PaneId>,
+    /// The person's relay, for devices that cannot reach this desktop
+    /// directly.
+    #[serde(default)]
+    pub relay: Option<RelaySettings>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+pub struct RelaySettings {
+    /// `wss://host[:port]` (or `ws://` behind nothing, for trying).
+    pub url: String,
+    /// The relay's access token.
+    pub token: String,
+    /// This desktop's room there (random, in the pairing link).
+    pub room: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -74,7 +88,7 @@ struct Paired<'a> {
     paired: u64,
 }
 
-struct Shared {
+pub(crate) struct Shared {
     dir: PathBuf,
     keys: Keys,
     /// Bumped on every output of a pane: connections look again.
@@ -89,7 +103,7 @@ struct Shared {
 
 impl Shared {
     /// `state.json` as it is now (read again when it changed).
-    fn state(&self) -> State {
+    pub(crate) fn state(&self) -> State {
         let path = self.dir.join("state.json");
         let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         let mut cached = self.state.lock().unwrap();
@@ -151,6 +165,12 @@ fn serve(dir: PathBuf) -> anyhow::Result<()> {
         }
         std::thread::sleep(Duration::from_secs(1));
     };
+    {
+        let shared = Arc::clone(&shared);
+        std::thread::Builder::new()
+            .name("nativeterm-relay".into())
+            .spawn(move || crate::relay::run(shared))?;
+    }
     let watcher = Arc::clone(&shared);
     if let Some(mux) = Mux::try_get() {
         mux.subscribe(move |n| {
@@ -243,7 +263,7 @@ fn connection(shared: &Shared, stream: TcpStream) -> anyhow::Result<()> {
 /// A device this desktop does not know (never paired, or removed): it is
 /// told so (`CLOSE_NOT_PAIRED`), and stops trying.
 #[derive(Debug)]
-struct NotPaired;
+pub(crate) struct NotPaired;
 
 impl std::fmt::Display for NotPaired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -253,7 +273,7 @@ impl std::fmt::Display for NotPaired {
 
 impl std::error::Error for NotPaired {}
 
-fn not_paired(mut ws: Ws) -> anyhow::Result<()> {
+pub(crate) fn not_paired<S: Read + Write>(mut ws: Ws<S>) -> anyhow::Result<()> {
     use tungstenite::protocol::frame::coding::CloseCode;
     use tungstenite::protocol::CloseFrame;
     let frame = CloseFrame {
@@ -340,9 +360,9 @@ fn content_type(path: &Path) -> &'static str {
     }
 }
 
-type Ws = WebSocket<TcpStream>;
+pub(crate) type Ws<S = TcpStream> = WebSocket<S>;
 
-fn binary(ws: &mut Ws) -> anyhow::Result<Vec<u8>> {
+fn binary<S: Read + Write>(ws: &mut Ws<S>) -> anyhow::Result<Vec<u8>> {
     loop {
         match ws.read()? {
             Message::Binary(b) => return Ok(b.to_vec()),
@@ -354,7 +374,11 @@ fn binary(ws: &mut Ws) -> anyhow::Result<Vec<u8>> {
 
 /// Pairing (with the one-time secret NativeTerm put in the QR code) or
 /// resuming (a paired device); the channel and the device's key.
-fn handshake(shared: &Shared, ws: &mut Ws, pairing: bool) -> anyhow::Result<(Channel, [u8; 32])> {
+pub(crate) fn handshake<S: Read + Write>(
+    shared: &Shared,
+    ws: &mut Ws<S>,
+    pairing: bool,
+) -> anyhow::Result<(Channel, [u8; 32])> {
     let mut secret_hex = None;
     let mut hs = if pairing {
         let state = shared.state();
@@ -417,7 +441,11 @@ fn now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-fn send(ws: &mut Ws, channel: &mut Channel, frame: &Frame) -> anyhow::Result<()> {
+fn send<S: Read + Write>(
+    ws: &mut Ws<S>,
+    channel: &mut Channel,
+    frame: &Frame,
+) -> anyhow::Result<()> {
     for message in channel.seal(&wire::encode(frame))? {
         ws.send(Message::Binary(message.into()))?;
     }
@@ -472,9 +500,9 @@ fn apply_input(
 }
 
 /// A device after the handshake: what it asks, and what changes.
-fn session(
+pub(crate) fn session<S: Read + Write>(
     shared: &Shared,
-    mut ws: Ws,
+    mut ws: Ws<S>,
     mut channel: Channel,
     device: [u8; 32],
     paired_now: bool,

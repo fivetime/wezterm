@@ -10,6 +10,7 @@
 //! numbers what changed for the devices.
 
 pub mod input;
+mod relay;
 pub mod server;
 
 use std::ops::Range;

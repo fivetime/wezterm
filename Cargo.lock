@@ -3974,6 +3974,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "native-term-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "env_logger 0.11.11",
+ "futures-util",
+ "log",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3999,11 +4013,13 @@ dependencies = [
  "log",
  "mux",
  "native-term-remote",
+ "native-term-server",
  "rangeset",
  "serde",
  "serde_json",
  "tempfile",
  "termwiz",
+ "tokio",
  "tungstenite",
  "wezterm-term",
 ]
@@ -5626,7 +5642,9 @@ version = "0.23.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
 dependencies = [
+ "log",
  "once_cell",
+ "ring",
  "rustls-pki-types",
  "rustls-webpki",
  "subtle",
@@ -6763,6 +6781,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-tungstenite"
+version = "0.30.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17a073bfed563fa236697a068031408a93cd9522e08abf9933ead3e73411bd71"
+dependencies = [
+ "futures-util",
+ "log",
+ "tokio",
+ "tungstenite",
+]
+
+[[package]]
 name = "tokio-util"
 version = "0.7.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6949,6 +6979,7 @@ dependencies = [
  "http",
  "httparse",
  "log",
+ "native-tls",
  "rand 0.10.2",
  "sha1 0.11.0",
  "thiserror 2.0.20",
