@@ -123,7 +123,7 @@ fn a_device_moves_onto_a_data_channel() {
     std::fs::write(
         dir.join("state.json"),
         format!(
-            r#"{{"port": {port}, "sessions": [], "pairing": {{"secret": "{}", "expires": {later}}}}}"#,
+            r#"{{"port": {port}, "listen": "127.0.0.1", "sessions": [], "pairing": {{"secret": "{}", "expires": {later}}}}}"#,
             hex(&secret)
         ),
     )
@@ -153,7 +153,7 @@ fn a_device_moves_onto_a_data_channel() {
 
     // the offer, in the session; the answer back in it
     let started = Instant::now();
-    let addresses = native_term_p2p::own_addresses();
+    let addresses = ["127.0.0.1".parse().unwrap()];
     let (offering, sdp) = native_term_p2p::offer(&addresses, &[]).unwrap();
     send(
         &mut socket,

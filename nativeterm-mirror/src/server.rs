@@ -164,6 +164,11 @@ pub struct State {
     /// closed with `CLOSE_DISCONNECTED`.
     #[serde(default)]
     pub disconnect: Vec<u64>,
+    /// The one address to listen on, the LAN service's and a direct
+    /// connection's (the tests: 127.0.0.1, which no firewall asks
+    /// about); none: every address the machine has.
+    #[serde(default)]
+    pub listen: Option<std::net::IpAddr>,
 }
 
 /// What a paired device may do: see only, or see and type. Chosen with
@@ -427,7 +432,11 @@ fn serve(dir: PathBuf) -> anyhow::Result<()> {
     // both families: a dual-stack socket where the system makes one, else
     // the IPv4 one beside it
     let mut listeners = Vec::new();
-    for address in [format!("[::]:{port}"), format!("0.0.0.0:{port}")] {
+    let addresses = match shared.state().listen {
+        Some(ip) => vec![std::net::SocketAddr::new(ip, port).to_string()],
+        None => vec![format!("[::]:{port}"), format!("0.0.0.0:{port}")],
+    };
+    for address in addresses {
         match TcpListener::bind(&address) {
             Ok(l) => listeners.push(l),
             Err(e) => log::debug!("nativeterm remote control: {address}: {e}"),

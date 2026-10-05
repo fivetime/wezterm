@@ -58,8 +58,12 @@ pub(crate) fn answer(shared: &Arc<Shared>, offer: String) -> mpsc::Receiver<Stri
     let spawned = std::thread::Builder::new()
         .name("nativeterm-direct".into())
         .spawn(move || {
-            let stun = stun_servers(&shared.state());
-            let addresses = native_term_p2p::own_addresses();
+            let state = shared.state();
+            let stun = stun_servers(&state);
+            let addresses = match state.listen {
+                Some(ip) => vec![ip],
+                None => native_term_p2p::own_addresses(),
+            };
             match native_term_p2p::answer(&offer, &addresses, &stun) {
                 Ok((peer, sdp)) => {
                     let _ = tx.send(sdp);

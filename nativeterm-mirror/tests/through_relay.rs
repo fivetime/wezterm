@@ -104,7 +104,7 @@ fn pairing_and_resuming_through_the_relay() {
         .unwrap()
         .port();
     let state = format!(
-        r#"{{"port": {lan}, "sessions": [], "pairing": {{"secret": "{}", "expires": {later}}},
+        r#"{{"port": {lan}, "listen": "127.0.0.1", "sessions": [], "pairing": {{"secret": "{}", "expires": {later}}},
             "relay": {{"url": "ws://127.0.0.1:{port}", "token": "{TOKEN}", "room": "{ROOM}"}}}}"#,
         hex(&secret)
     );

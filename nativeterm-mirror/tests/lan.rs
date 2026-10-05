@@ -96,7 +96,7 @@ fn receive(ws: &mut Ws, channel: &mut Channel) -> Option<Body> {
 fn write_state(dir: &Path, port: u16, secret: &[u8; 32], expires: u64) {
     let web = dir.join("web").display().to_string().replace('\\', "/");
     let state = format!(
-        r#"{{"port": {port}, "sessions": [], "pairing": {{"secret": "{}", "expires": {expires}}}, "web": "{web}"}}"#,
+        r#"{{"port": {port}, "listen": "127.0.0.1", "sessions": [], "pairing": {{"secret": "{}", "expires": {expires}}}, "web": "{web}"}}"#,
         hex(secret)
     );
     std::fs::write(dir.join("state.json"), state).unwrap();
