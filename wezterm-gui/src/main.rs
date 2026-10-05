@@ -685,8 +685,14 @@ fn setup_mux(
     mux.register_client(client_id.clone());
     mux.replace_identity(Some(client_id));
     // NativeTerm's remote control, when NativeTerm asked for it
-    if let Some(dir) = config.nativeterm_remote_dir.as_ref() {
-        nativeterm_mirror::server::start(dir.into());
+    // (the configuration's, else the one NativeTerm started this with)
+    let remote_dir = config
+        .nativeterm_remote_dir
+        .as_ref()
+        .map(std::path::PathBuf::from)
+        .or_else(|| NATIVETERM_REMOTE_DIR.get().cloned().flatten());
+    if let Some(dir) = remote_dir {
+        nativeterm_mirror::server::start(dir);
     }
     let default_workspace_name = default_workspace_name.unwrap_or(
         config
@@ -830,9 +836,19 @@ fn terminate_with_error(err: anyhow::Error) -> ! {
     terminate_with_error_message(&err_text)
 }
 
+/// Where NativeTerm keeps remote control's state, when it started this
+/// GUI (`NATIVETERM_REMOTE_DIR`; taken out of the environment at once, so
+/// the shells in the tabs don't inherit it).
+static NATIVETERM_REMOTE_DIR: std::sync::OnceLock<Option<std::path::PathBuf>> =
+    std::sync::OnceLock::new();
+
 fn main() {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
+
+    let remote_dir = std::env::var_os("NATIVETERM_REMOTE_DIR").filter(|d| !d.is_empty());
+    std::env::remove_var("NATIVETERM_REMOTE_DIR");
+    let _ = NATIVETERM_REMOTE_DIR.set(remote_dir.map(std::path::PathBuf::from));
 
     config::designate_this_as_the_main_thread();
     config::assign_error_callback(mux::connui::show_configuration_error_message);
