@@ -9,6 +9,7 @@
 //! palette as the desktop draws them) and gives them to the mirror, which
 //! numbers what changed for the devices.
 
+pub mod input;
 pub mod server;
 
 use std::ops::Range;

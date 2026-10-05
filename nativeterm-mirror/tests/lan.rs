@@ -219,6 +219,33 @@ fn pairing_resuming_and_revoking_over_loopback() {
 
     // revoked (NativeTerm removes the file): the open connection ends
     let _ = receive(&mut socket, &mut channel); // the sessions list
+
+    // input to a session not open to remote control: refused, and
+    // recorded without its text
+    let input = native_term_remote::proto::Input {
+        session: "5".into(),
+        id: 1,
+        kind: Some(native_term_remote::proto::input::Kind::Text(
+            "hunter2".into(),
+        )),
+    };
+    send(&mut socket, &mut channel, &wire::frame(Body::Input(input)));
+    match receive(&mut socket, &mut channel) {
+        Some(Body::InputResult(r)) => {
+            assert_eq!((r.session.as_str(), r.id), ("5", 1));
+            assert_eq!(
+                r.reason,
+                native_term_remote::proto::input_result::Reason::NoSession as i32
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    let log = std::fs::read_to_string(dir.join("input.log")).unwrap();
+    assert!(
+        log.contains(" 5 text, 7 characters (refused: no such session)"),
+        "{log}"
+    );
+    assert!(!log.contains("hunter2"));
     std::fs::remove_file(&record).unwrap();
     let start = Instant::now();
     assert!(receive(&mut socket, &mut channel).is_none(), "cut off");

@@ -25,7 +25,8 @@ use mux::pane::PaneId;
 use mux::{Mux, MuxNotification};
 use native_term_remote::noise::{Channel, Handshake, Keys};
 use native_term_remote::proto::{
-    ended, frame::Body, Ended, Frame, Heartbeat, SessionInfo, Sessions,
+    ended, frame::Body, input_result::Reason, Ended, Frame, Heartbeat, InputResult, SessionInfo,
+    Sessions,
 };
 use native_term_remote::screen::Since;
 use native_term_remote::wire;
@@ -53,6 +54,9 @@ pub struct State {
     /// The web client's files.
     #[serde(default)]
     pub web: Option<PathBuf>,
+    /// Panes open to be seen only: input to them is refused.
+    #[serde(default)]
+    pub read_only: Vec<PaneId>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
@@ -398,11 +402,38 @@ fn sessions(state: &State) -> Frame {
                 title: pane.get_title(),
                 cols: dims.cols as u32,
                 lines: dims.viewport_rows as u32,
-                read_only: true,
+                read_only: state.read_only.contains(id),
             })
         })
         .collect();
     wire::frame(Body::Sessions(Sessions { sessions }))
+}
+
+/// A device's input to a session open to remote control (and not read
+/// only), as the desktop's keyboard would type it; recorded in
+/// `input.log`.
+fn apply_input(
+    shared: &Shared,
+    device: &[u8; 32],
+    input: &native_term_remote::proto::Input,
+) -> Reason {
+    let Some(kind) = &input.kind else {
+        return Reason::UnknownKey;
+    };
+    let state = shared.state();
+    let pane_id = input.session.parse::<PaneId>().ok();
+    let pane = pane_id
+        .filter(|p| state.sessions.contains(p))
+        .and_then(|p| Mux::try_get()?.get_pane(p));
+    let reason = match (pane, pane_id) {
+        (None, _) => Reason::NoSession,
+        (Some(_), Some(id)) if state.read_only.contains(&id) => Reason::ReadOnly,
+        (Some(pane), _) => crate::input::apply(&*pane, kind),
+    };
+    // the device by the start of its key, as NativeTerm's list shows it
+    let who = hex(&device[..4]);
+    crate::input::record(&shared.dir, &who, &input.session, kind, reason);
+    reason
 }
 
 /// A device after the handshake: what it asks, and what changes.
@@ -452,7 +483,20 @@ fn session(
                                 seen_generation = u64::MAX;
                             }
                         }
-                        // read-only for now (R2 takes input)
+                        Some(Body::Input(input)) if welcomed => {
+                            let reason = apply_input(shared, &device, &input);
+                            let result = InputResult {
+                                session: input.session,
+                                id: input.id,
+                                reason: reason as i32,
+                            };
+                            send(
+                                &mut ws,
+                                &mut channel,
+                                &wire::frame(Body::InputResult(result)),
+                            )?;
+                            last_sent = Instant::now();
+                        }
                         _ => {}
                     }
                 }
