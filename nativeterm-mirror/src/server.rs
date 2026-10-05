@@ -596,8 +596,6 @@ fn content_type(path: &Path) -> &'static str {
     }
 }
 
-pub(crate) type Ws<S = TcpStream> = WebSocket<S>;
-
 /// The next message, within the handshake's time.
 fn message<L: Link>(link: &mut L) -> anyhow::Result<Vec<u8>> {
     let until = Instant::now() + Duration::from_secs(10);
