@@ -37,6 +37,7 @@ pub mod activity;
 pub mod client;
 pub mod connui;
 pub mod domain;
+pub mod held_size;
 pub mod localpane;
 pub mod pane;
 pub mod renderable;
@@ -827,6 +828,7 @@ impl Mux {
     }
 
     fn remove_pane_internal(&self, pane_id: PaneId) {
+        held_size::forget(pane_id);
         log::debug!("removing pane {}", pane_id);
         let mut changed = false;
         if let Some(pane) = self.panes.write().remove(&pane_id).clone() {

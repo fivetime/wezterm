@@ -450,6 +450,9 @@ impl Pane for LocalPane {
     }
 
     fn resize(&self, size: TerminalSize) -> Result<(), Error> {
+        // NativeTerm's remote control: held at a device's size, within
+        // what the window gives (see held_size)
+        let size = crate::held_size::apply(self.pane_id, size);
         // the same size again (a tab resized to what it has): no pty call
         // (ConPTY's is a round trip to conhost), no reflow
         if self.terminal.lock().get_size() == size {

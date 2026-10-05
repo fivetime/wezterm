@@ -165,6 +165,8 @@ pub(crate) struct Shared {
     next_connection: AtomicU64,
     /// Devices' roles, with their files' times.
     roles: Mutex<HashMap<[u8; 32], RoleSeen>>,
+    /// Panes held at a device's size, and the connection that asked last.
+    holders: Mutex<HashMap<PaneId, u64>>,
 }
 
 impl Shared {
@@ -306,6 +308,7 @@ fn serve(dir: PathBuf) -> anyhow::Result<()> {
         connections: Mutex::new(HashMap::new()),
         next_connection: AtomicU64::new(now() * 1000),
         roles: Mutex::new(HashMap::new()),
+        holders: Mutex::new(HashMap::new()),
     });
     // none yet (a list left by the run before is not true now)
     shared.write_connections();
@@ -663,6 +666,42 @@ fn sessions(state: &State, viewer: bool) -> Frame {
     wire::frame(Body::Sessions(Sessions { sessions }))
 }
 
+/// Hold the pane at `cols` x `lines` (0 columns: give it back to its
+/// window), on the GUI's thread, the window told to draw it again.
+fn hold_size(pane: PaneId, cols: u32, lines: u32) {
+    // (no mux, no GUI thread: the tests' service)
+    if Mux::try_get().is_none() {
+        return;
+    }
+    promise::spawn::spawn_into_main_thread(async move {
+        let Some(mux) = Mux::try_get() else { return };
+        let Some(pane_ref) = mux.get_pane(pane) else {
+            return;
+        };
+        if cols == 0 {
+            mux::held_size::release(pane);
+        } else {
+            mux::held_size::hold(pane, cols as usize, lines as usize);
+        }
+        // what the window wants, now held or not
+        let size = mux::held_size::requested(pane).unwrap_or_else(|| {
+            let d = pane_ref.get_dimensions();
+            wezterm_term::TerminalSize {
+                rows: d.viewport_rows,
+                cols: d.cols,
+                pixel_width: d.pixel_width,
+                pixel_height: d.pixel_height,
+                dpi: d.dpi,
+            }
+        });
+        let _ = pane_ref.resize(size);
+        if let Some((_, _, tab)) = mux.resolve_pane_id(pane) {
+            Mux::notify_from_any_thread(MuxNotification::TabResized(tab));
+        }
+    })
+    .detach();
+}
+
 /// A device's input to a session open to remote control (and not read
 /// only), as the desktop's keyboard would type it; recorded in
 /// `input.log`.
@@ -708,6 +747,22 @@ pub(crate) fn session<S: Read + Write + Wait>(
         fn drop(&mut self) {
             if self.0.connections.lock().unwrap().remove(&self.1).is_some() {
                 self.0.write_connections();
+            }
+            // the tabs it held at its size go back to their windows
+            let held: Vec<PaneId> = {
+                let mut holders = self.0.holders.lock().unwrap();
+                let mine: Vec<PaneId> = holders
+                    .iter()
+                    .filter(|(_, c)| **c == self.1)
+                    .map(|(p, _)| *p)
+                    .collect();
+                for pane in &mine {
+                    holders.remove(pane);
+                }
+                mine
+            };
+            for pane in held {
+                hold_size(pane, 0, 0);
             }
         }
     }
@@ -776,6 +831,28 @@ pub(crate) fn session<S: Read + Write + Wait>(
                                 seen_generation = u64::MAX;
                                 let panes: Vec<PaneId> = watching.keys().copied().collect();
                                 shared.connection_changed(id, |c| c.watching = panes);
+                            }
+                        }
+                        Some(Body::HoldSize(h)) if welcomed => {
+                            if let Some(pane) = h
+                                .session
+                                .parse::<PaneId>()
+                                .ok()
+                                .filter(|p| open.contains(p))
+                            {
+                                let mut holders = shared.holders.lock().unwrap();
+                                let give = if h.cols == 0 {
+                                    // given back only by the one holding it
+                                    holders.get(&pane) == Some(&id)
+                                        && holders.remove(&pane).is_some()
+                                } else {
+                                    holders.insert(pane, id);
+                                    true
+                                };
+                                drop(holders);
+                                if give {
+                                    hold_size(pane, h.cols, h.lines);
+                                }
                             }
                         }
                         Some(Body::Input(input)) if welcomed => {
