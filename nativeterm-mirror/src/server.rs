@@ -60,6 +60,82 @@ impl Wait for TcpStream {
         self.set_read_timeout(Some(every))
     }
 }
+
+/// What a connection to a device gave.
+pub(crate) enum Got {
+    Message(Vec<u8>),
+    /// Nothing within the time looked for.
+    Nothing,
+    Closed,
+}
+
+/// A connection to a device, whatever carries it (a WebSocket on the LAN
+/// or through the relay; a WebRTC data channel): sealed messages in and
+/// out, a close with a code.
+pub(crate) trait Link {
+    /// The next message, or `Nothing` once `wait`'s time passed.
+    fn receive(&mut self) -> anyhow::Result<Got>;
+    fn send(&mut self, message: Vec<u8>) -> anyhow::Result<()>;
+    /// Close with `code`; the device's answer read before it goes (a
+    /// connection dropped with unread data is reset, and the reset can
+    /// throw the close, and its code, away on the way).
+    fn close(&mut self, code: u16, reason: &str);
+    /// How long `receive` waits for a message.
+    fn wait(&mut self, every: Duration) -> std::io::Result<()>;
+}
+
+impl<S: Read + Write + Wait> Link for WebSocket<S> {
+    fn receive(&mut self) -> anyhow::Result<Got> {
+        loop {
+            match self.read() {
+                Ok(Message::Binary(b)) => return Ok(Got::Message(b.to_vec())),
+                Ok(Message::Close(_)) => return Ok(Got::Closed),
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(e))
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    return Ok(Got::Nothing)
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    fn send(&mut self, message: Vec<u8>) -> anyhow::Result<()> {
+        WebSocket::send(self, Message::Binary(message.into()))?;
+        Ok(())
+    }
+
+    fn close(&mut self, code: u16, reason: &str) {
+        use tungstenite::protocol::frame::coding::CloseCode;
+        use tungstenite::protocol::CloseFrame;
+        let frame = CloseFrame {
+            code: CloseCode::from(code),
+            reason: reason.to_string().into(),
+        };
+        let _ = WebSocket::close(self, Some(frame));
+        let _ = self.flush();
+        let until = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < until {
+            match self.read() {
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(e))
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Err(_) => break,
+            }
+        }
+    }
+
+    fn wait(&mut self, every: Duration) -> std::io::Result<()> {
+        self.get_ref().wait(every)
+    }
+}
 const HEARTBEAT: Duration = Duration::from_secs(30);
 /// A connection that says nothing for this long is gone.
 const SILENCE: Duration = Duration::from_secs(90);
@@ -441,37 +517,9 @@ impl std::fmt::Display for NotPaired {
 
 impl std::error::Error for NotPaired {}
 
-pub(crate) fn not_paired<S: Read + Write>(mut ws: Ws<S>) -> anyhow::Result<()> {
-    close_with(&mut ws, wire::CLOSE_NOT_PAIRED, "not paired");
+pub(crate) fn not_paired<L: Link>(mut link: L) -> anyhow::Result<()> {
+    link.close(wire::CLOSE_NOT_PAIRED, "not paired");
     Ok(())
-}
-
-/// Close with `code`; the device's answer read before the connection
-/// goes.
-fn close_with<S: Read + Write>(ws: &mut Ws<S>, code: u16, reason: &str) {
-    use tungstenite::protocol::frame::coding::CloseCode;
-    use tungstenite::protocol::CloseFrame;
-    let frame = CloseFrame {
-        code: CloseCode::from(code),
-        reason: reason.to_string().into(),
-    };
-    let _ = ws.close(Some(frame));
-    // the close goes out before the socket does, and the device's answer
-    // is read: a connection dropped with unread data is reset, and the
-    // reset can throw the close (and its code) away on the way
-    let _ = ws.flush();
-    let until = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < until {
-        match ws.read() {
-            Ok(_) => {}
-            Err(tungstenite::Error::Io(e))
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
-            Err(_) => break,
-        }
-    }
 }
 
 /// The request's path and whether it asks for a WebSocket, read without
@@ -550,21 +598,23 @@ fn content_type(path: &Path) -> &'static str {
 
 pub(crate) type Ws<S = TcpStream> = WebSocket<S>;
 
-fn binary<S: Read + Write>(ws: &mut Ws<S>) -> anyhow::Result<Vec<u8>> {
+/// The next message, within the handshake's time.
+fn message<L: Link>(link: &mut L) -> anyhow::Result<Vec<u8>> {
+    let until = Instant::now() + Duration::from_secs(10);
     loop {
-        match ws.read()? {
-            Message::Binary(b) => return Ok(b.to_vec()),
-            Message::Close(_) => anyhow::bail!("closed"),
-            _ => {}
+        match link.receive()? {
+            Got::Message(m) => return Ok(m),
+            Got::Closed => anyhow::bail!("closed"),
+            Got::Nothing => anyhow::ensure!(Instant::now() < until, "no answer"),
         }
     }
 }
 
 /// Pairing (with the one-time secret NativeTerm put in the QR code) or
 /// resuming (a paired device); the channel and the device's key.
-pub(crate) fn handshake<S: Read + Write>(
+pub(crate) fn handshake<L: Link>(
     shared: &Shared,
-    ws: &mut Ws<S>,
+    ws: &mut L,
     pairing: bool,
 ) -> anyhow::Result<(Channel, [u8; 32])> {
     let mut secret_hex = None;
@@ -590,9 +640,9 @@ pub(crate) fn handshake<S: Read + Write>(
     };
     while !hs.finished() {
         if hs.my_turn() {
-            ws.send(Message::Binary(hs.write()?.into()))?;
+            ws.send(hs.write()?)?;
         } else {
-            hs.read(&binary(ws)?)?;
+            hs.read(&message(ws)?)?;
             // resuming: who it is is known after the first message
             if let (false, Some(key)) = (pairing, hs.remote_key()) {
                 if !shared.paired(&key) {
@@ -639,13 +689,9 @@ fn now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
-fn send<S: Read + Write>(
-    ws: &mut Ws<S>,
-    channel: &mut Channel,
-    frame: &Frame,
-) -> anyhow::Result<()> {
+fn send<L: Link>(ws: &mut L, channel: &mut Channel, frame: &Frame) -> anyhow::Result<()> {
     for message in channel.seal(&wire::encode(frame))? {
-        ws.send(Message::Binary(message.into()))?;
+        ws.send(message)?;
     }
     Ok(())
 }
@@ -738,9 +784,9 @@ fn apply_input(
 }
 
 /// A device after the handshake: what it asks, and what changes.
-pub(crate) fn session<S: Read + Write + Wait>(
+pub(crate) fn session<L: Link>(
     shared: &Shared,
-    mut ws: Ws<S>,
+    mut ws: L,
     mut channel: Channel,
     device: [u8; 32],
     paired_now: bool,
@@ -791,11 +837,11 @@ pub(crate) fn session<S: Read + Write + Wait>(
             TICK
         };
         if want != every {
-            ws.get_ref().wait(want)?;
+            ws.wait(want)?;
             every = want;
         }
-        match ws.read() {
-            Ok(Message::Binary(b)) => {
+        match ws.receive()? {
+            Got::Message(b) => {
                 last_heard = Instant::now();
                 if let Some(frame) = channel.open(&b)?.and_then(|bytes| wire::decode(&bytes)) {
                     match frame.body {
@@ -896,14 +942,8 @@ pub(crate) fn session<S: Read + Write + Wait>(
                     }
                 }
             }
-            Ok(Message::Close(_)) => return Ok(()),
-            Ok(_) => {}
-            Err(tungstenite::Error::Io(e))
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) => {}
-            Err(e) => return Err(e.into()),
+            Got::Closed => return Ok(()),
+            Got::Nothing => {}
         }
         anyhow::ensure!(last_heard.elapsed() < SILENCE, "silent too long");
         // a device whose pairing was taken away goes at once, told so
@@ -925,11 +965,7 @@ pub(crate) fn session<S: Read + Write + Wait>(
         }
         // disconnected by the desktop: told so, and not coming back by itself
         if state.disconnect.contains(&id) {
-            close_with(
-                &mut ws,
-                wire::CLOSE_DISCONNECTED,
-                "disconnected by the desktop",
-            );
+            ws.close(wire::CLOSE_DISCONNECTED, "disconnected by the desktop");
             return Ok(());
         }
         let now_open: HashSet<PaneId> = state.sessions.iter().copied().collect();
