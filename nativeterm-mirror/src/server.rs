@@ -40,6 +40,12 @@ const TICK: Duration = Duration::from_millis(40);
 /// How often while something is happening (input came, rows went):
 /// an echo is sent within this of the pane drawing it, not within `TICK`.
 const QUICK: Duration = Duration::from_millis(4);
+/// Rows go to a device at most this often (30 a second): a stream of
+/// output (a build, `cat`) comes as the screen every frame, not as every
+/// change. (Synchronized output, DEC 2026, needs nothing here: WezTerm's
+/// mux holds a frame's changes until it ends, so the screen is never seen
+/// half drawn.)
+const FRAME: Duration = Duration::from_millis(33);
 /// How long after the last input or output it stays `QUICK`.
 const BUSY: Duration = Duration::from_millis(500);
 
@@ -777,6 +783,7 @@ pub(crate) fn session<S: Read + Write + Wait>(
     let mut busy_until = Instant::now();
     let mut every = TICK;
     let mut viewer = shared.role(&device) == Role::View;
+    let mut rows_sent = Instant::now() - FRAME;
     loop {
         let want = if Instant::now() < busy_until {
             QUICK
@@ -829,6 +836,8 @@ pub(crate) fn session<S: Read + Write + Wait>(
                             {
                                 watching.insert(pane, s.since);
                                 seen_generation = u64::MAX;
+                                // its screen at once, not after a frame
+                                rows_sent = Instant::now() - FRAME;
                                 let panes: Vec<PaneId> = watching.keys().copied().collect();
                                 shared.connection_changed(id, |c| c.watching = panes);
                             }
@@ -938,7 +947,10 @@ pub(crate) fn session<S: Read + Write + Wait>(
             last_sent = Instant::now();
         }
         let generation = shared.generation.load(Ordering::Relaxed);
-        if generation != seen_generation {
+        // (what changed within a frame waits for the next: it is still
+        // there, the generation not taken)
+        if generation != seen_generation && rows_sent.elapsed() >= FRAME {
+            rows_sent = Instant::now();
             seen_generation = generation;
             let panes: Vec<PaneId> = watching.keys().copied().collect();
             for pane in panes {

@@ -182,6 +182,42 @@ fn main() -> anyhow::Result<()> {
         link.received - before
     );
 
+    // a stream of output: what arrives while `seq` prints for 4 s
+    if std::env::var_os("BENCH_STREAM").is_some() {
+        let (frames0, bytes0) = (0usize, link.received);
+        let mut frames = frames0;
+        link.send(
+            &device
+                .text(&session, "seq 1 2000000")
+                .map_err(|_| anyhow::anyhow!("not connected"))?,
+        )?;
+        link.send(
+            &device
+                .key(&session, "Enter", 0)
+                .map_err(|_| anyhow::anyhow!("not connected"))?,
+        )?;
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_secs(4) {
+            let frame = link.frame()?;
+            if matches!(frame.body, Some(Body::Rows(_)) | Some(Body::Snapshot(_))) {
+                frames += 1;
+            }
+            device.receive(frame);
+        }
+        let secs = t.elapsed().as_secs_f64();
+        println!(
+            "stream: {:.1} updates/s, {:.1} KB/s while seq printed",
+            frames as f64 / secs,
+            (link.received - bytes0) as f64 / 1024.0 / secs
+        );
+        link.send(
+            &device
+                .key(&session, "c", 4)
+                .map_err(|_| anyhow::anyhow!("not connected"))?,
+        )?;
+        return Ok(());
+    }
+
     // typing: a character until the row echoing it comes back
     let mut latencies = Vec::new();
     let mut bytes_in = Vec::new();
