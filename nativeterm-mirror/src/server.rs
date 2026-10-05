@@ -37,6 +37,23 @@ use crate::{PaneMirror, PaneSource};
 
 /// How often a connection looks for changes, and sends a heartbeat.
 const TICK: Duration = Duration::from_millis(40);
+/// How often while something is happening (input came, rows went):
+/// an echo is sent within this of the pane drawing it, not within `TICK`.
+const QUICK: Duration = Duration::from_millis(4);
+/// How long after the last input or output it stays `QUICK`.
+const BUSY: Duration = Duration::from_millis(500);
+
+/// The stream under a connection's WebSocket, whose read timeout is how
+/// often the connection looks for changes.
+pub(crate) trait Wait {
+    fn wait(&self, every: Duration) -> std::io::Result<()>;
+}
+
+impl Wait for TcpStream {
+    fn wait(&self, every: Duration) -> std::io::Result<()> {
+        self.set_read_timeout(Some(every))
+    }
+}
 const HEARTBEAT: Duration = Duration::from_secs(30);
 /// A connection that says nothing for this long is gone.
 const SILENCE: Duration = Duration::from_secs(90);
@@ -558,7 +575,7 @@ fn apply_input(
 }
 
 /// A device after the handshake: what it asks, and what changes.
-pub(crate) fn session<S: Read + Write>(
+pub(crate) fn session<S: Read + Write + Wait>(
     shared: &Shared,
     mut ws: Ws<S>,
     mut channel: Channel,
@@ -572,7 +589,18 @@ pub(crate) fn session<S: Read + Write>(
     let mut last_heard = Instant::now();
     let mut last_sent = Instant::now();
     let mut welcomed = false;
+    let mut busy_until = Instant::now();
+    let mut every = TICK;
     loop {
+        let want = if Instant::now() < busy_until {
+            QUICK
+        } else {
+            TICK
+        };
+        if want != every {
+            ws.get_ref().wait(want)?;
+            every = want;
+        }
         match ws.read() {
             Ok(Message::Binary(b)) => {
                 last_heard = Instant::now();
@@ -605,6 +633,7 @@ pub(crate) fn session<S: Read + Write>(
                             }
                         }
                         Some(Body::Input(input)) if welcomed => {
+                            busy_until = Instant::now() + BUSY;
                             let reason = apply_input(shared, &device, &input);
                             let result = InputResult {
                                 session: input.session,
@@ -672,6 +701,7 @@ pub(crate) fn session<S: Read + Write>(
                     }
                     Some(Since::Nothing) => {}
                     Some(Since::Rows(rows)) => {
+                        busy_until = Instant::now() + BUSY;
                         watching.insert(pane, rows.seq);
                         send(&mut ws, &mut channel, &wire::frame(Body::Rows(rows)))?;
                     }

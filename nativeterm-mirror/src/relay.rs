@@ -132,6 +132,16 @@ fn open(relay: &RelaySettings, path: &str) -> anyhow::Result<Relayed> {
     Ok(ws)
 }
 
+impl crate::server::Wait for MaybeTlsStream<TcpStream> {
+    fn wait(&self, every: Duration) -> std::io::Result<()> {
+        match self {
+            MaybeTlsStream::Plain(s) => s.set_read_timeout(Some(every)),
+            MaybeTlsStream::NativeTls(s) => s.get_ref().set_read_timeout(Some(every)),
+            _ => Ok(()),
+        }
+    }
+}
+
 /// The read timeout of the TCP connection under the WebSocket (and TLS).
 fn timeout(ws: &Relayed, t: Option<Duration>) -> std::io::Result<()> {
     match ws.get_ref() {
