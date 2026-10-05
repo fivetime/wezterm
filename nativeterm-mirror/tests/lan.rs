@@ -156,6 +156,10 @@ fn pairing_resuming_and_revoking_over_loopback() {
         .join(format!("{}.json", hex(&phone.public)));
     let text = std::fs::read_to_string(&record).unwrap();
     assert!(text.contains("\"my phone\""), "{text}");
+    assert!(
+        text.contains("\"role\":\"operate\""),
+        "the code's role: {text}"
+    );
     drop(socket);
 
     // the code pairs one device only
@@ -282,6 +286,13 @@ fn pairing_resuming_and_revoking_over_loopback() {
 
     // revoked (NativeTerm removes the file): the open connection ends
     let _ = receive(&mut socket, &mut channel); // the sessions list
+                                                // the desktop makes the device a viewer: its sessions again, now read only
+    let paired_at = std::fs::read_to_string(&record).unwrap();
+    std::fs::write(&record, paired_at.replace("\"operate\"", "\"view\"")).unwrap();
+    assert!(
+        matches!(receive(&mut socket, &mut channel), Some(Body::Sessions(_))),
+        "told at once"
+    );
 
     // input to a session not open to remote control: refused, and
     // recorded without its text

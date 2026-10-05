@@ -82,10 +82,17 @@ pub struct State {
     /// closed with `CLOSE_DISCONNECTED`.
     #[serde(default)]
     pub disconnect: Vec<u64>,
-    /// Devices (keys in hex) kept from typing: they see, their input is
-    /// refused as read only.
-    #[serde(default)]
-    pub no_input: Vec<String>,
+}
+
+/// What a paired device may do: see only, or see and type. Chosen with
+/// the pairing code, changed on the desktop at any time (its file in
+/// `devices/`).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    View,
+    #[default]
+    Operate,
 }
 
 /// A connection now, as `connections.json` lists it for NativeTerm.
@@ -120,16 +127,26 @@ pub struct RelaySettings {
 pub struct Pairing {
     /// The one-time secret, in hex (64 digits).
     pub secret: String,
+    /// What the device paired with it may do.
+    #[serde(default)]
+    pub role: Role,
     /// When it expires (seconds since the epoch).
     pub expires: u64,
 }
 
 /// What is written for a paired device.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct Paired<'a> {
-    name: &'a str,
+    #[serde(borrow, default)]
+    name: std::borrow::Cow<'a, str>,
+    #[serde(default)]
     paired: u64,
+    #[serde(default)]
+    role: Role,
 }
+
+/// A device's role, and when its file was written (`None`: no file).
+type RoleSeen = (Option<SystemTime>, Role);
 
 pub(crate) struct Shared {
     dir: PathBuf,
@@ -146,6 +163,8 @@ pub(crate) struct Shared {
     connections: Mutex<HashMap<u64, Connection>>,
     /// A connection's id: this run's start, then a count.
     next_connection: AtomicU64,
+    /// Devices' roles, with their files' times.
+    roles: Mutex<HashMap<[u8; 32], RoleSeen>>,
 }
 
 impl Shared {
@@ -193,6 +212,25 @@ impl Shared {
             .join("devices")
             .join(format!("{}.json", hex(key)))
             .is_file()
+    }
+
+    /// The device's role, as its file says now (read again only when
+    /// the file changed: this is asked on every look).
+    fn role(&self, key: &[u8; 32]) -> Role {
+        let path = self.dir.join("devices").join(format!("{}.json", hex(key)));
+        let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        let mut roles = self.roles.lock().unwrap();
+        if let Some((at, role)) = roles.get(key) {
+            if *at == modified {
+                return *role;
+            }
+        }
+        let role = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Paired>(&t).ok().map(|p| p.role))
+            .unwrap_or_default();
+        roles.insert(*key, (modified, role));
+        role
     }
 
     /// The pane's mirror brought up to date; what a device that applied
@@ -267,6 +305,7 @@ fn serve(dir: PathBuf) -> anyhow::Result<()> {
         used: Mutex::new(HashSet::new()),
         connections: Mutex::new(HashMap::new()),
         next_connection: AtomicU64::new(now() * 1000),
+        roles: Mutex::new(HashMap::new()),
     });
     // none yet (a list left by the run before is not true now)
     shared.write_connections();
@@ -520,6 +559,7 @@ pub(crate) fn handshake<S: Read + Write>(
     pairing: bool,
 ) -> anyhow::Result<(Channel, [u8; 32])> {
     let mut secret_hex = None;
+    let mut role = Role::Operate;
     let mut hs = if pairing {
         let state = shared.state();
         let pairing = state
@@ -531,6 +571,7 @@ pub(crate) fn handshake<S: Read + Write>(
             "the pairing code was used"
         );
         secret_hex = Some(pairing.secret.clone());
+        role = pairing.role;
         let secret: [u8; 32] = unhex(&pairing.secret)
             .and_then(|s| s.try_into().ok())
             .ok_or_else(|| anyhow::anyhow!("the pairing's secret is not one"))?;
@@ -558,19 +599,27 @@ pub(crate) fn handshake<S: Read + Write>(
             shared.used.lock().unwrap().insert(secret),
             "the pairing code was used"
         );
-        record(shared, &device, "")?;
+        record(shared, &device, "", Some(role))?;
     }
     Ok((channel, device))
 }
 
-/// A paired device, for NativeTerm's list.
-fn record(shared: &Shared, device: &[u8; 32], name: &str) -> anyhow::Result<()> {
+/// A paired device, for NativeTerm's list: its name and role (`None`:
+/// the role it has).
+fn record(
+    shared: &Shared,
+    device: &[u8; 32],
+    name: &str,
+    role: Option<Role>,
+) -> anyhow::Result<()> {
     let dir = shared.dir.join("devices");
     std::fs::create_dir_all(&dir)?;
-    let paired = serde_json::to_vec(&Paired {
-        name,
-        paired: now(),
-    })?;
+    let role = role.unwrap_or_else(|| shared.role(device));
+    let paired = serde_json::to_vec(&serde_json::json!({
+        "name": name,
+        "paired": now(),
+        "role": role,
+    }))?;
     std::fs::write(dir.join(format!("{}.json", hex(device))), paired)?;
     Ok(())
 }
@@ -592,7 +641,9 @@ fn send<S: Read + Write>(
     Ok(())
 }
 
-fn sessions(state: &State) -> Frame {
+/// The sessions open, as this device sees them: read only where the tab
+/// is, or everywhere when the device may only see.
+fn sessions(state: &State, viewer: bool) -> Frame {
     let mux = Mux::try_get();
     let sessions = state
         .sessions
@@ -605,7 +656,7 @@ fn sessions(state: &State) -> Frame {
                 title: pane.get_title(),
                 cols: dims.cols as u32,
                 lines: dims.viewport_rows as u32,
-                read_only: state.read_only.contains(id),
+                read_only: viewer || state.read_only.contains(id),
             })
         })
         .collect();
@@ -632,7 +683,7 @@ fn apply_input(
     let reason = match (pane, pane_id) {
         (None, _) => Reason::NoSession,
         (Some(_), Some(id)) if state.read_only.contains(&id) => Reason::ReadOnly,
-        (Some(_), _) if state.no_input.contains(&hex(device)) => Reason::ReadOnly,
+        (Some(_), _) if shared.role(device) == Role::View => Reason::ReadOnly,
         (Some(pane), _) => crate::input::apply(&*pane, kind),
     };
     // the device by the start of its key, and which of its connections
@@ -670,6 +721,7 @@ pub(crate) fn session<S: Read + Write + Wait>(
     let mut welcomed = false;
     let mut busy_until = Instant::now();
     let mut every = TICK;
+    let mut viewer = shared.role(&device) == Role::View;
     loop {
         let want = if Instant::now() < busy_until {
             QUICK
@@ -693,7 +745,7 @@ pub(crate) fn session<S: Read + Write + Wait>(
                             welcomed = true;
                             // a device just paired: its name, for NativeTerm's list
                             if paired_now {
-                                record(shared, &device, &hello.device_name)?;
+                                record(shared, &device, &hello.device_name, None)?;
                             }
                             shared.connections.lock().unwrap().insert(
                                 id,
@@ -710,7 +762,7 @@ pub(crate) fn session<S: Read + Write + Wait>(
                             shared.write_connections();
                             let state = shared.state();
                             open = state.sessions.iter().copied().collect();
-                            send(&mut ws, &mut channel, &sessions(&state))?;
+                            send(&mut ws, &mut channel, &sessions(&state, viewer))?;
                             last_sent = Instant::now();
                         }
                         Some(Body::Subscribe(s)) if welcomed => {
@@ -778,6 +830,13 @@ pub(crate) fn session<S: Read + Write + Wait>(
         }
         // the sessions open now; one closed (or turned off) ends
         let state = shared.state();
+        // the role changed on the desktop: the sessions again, as it sees them
+        let now_viewer = shared.role(&device) == Role::View;
+        if now_viewer != viewer {
+            viewer = now_viewer;
+            send(&mut ws, &mut channel, &sessions(&state, viewer))?;
+            last_sent = Instant::now();
+        }
         // disconnected by the desktop: told so, and not coming back by itself
         if state.disconnect.contains(&id) {
             close_with(
@@ -798,7 +857,7 @@ pub(crate) fn session<S: Read + Write + Wait>(
                 send(&mut ws, &mut channel, &wire::frame(Body::Ended(ended)))?;
             }
             open = now_open;
-            send(&mut ws, &mut channel, &sessions(&state))?;
+            send(&mut ws, &mut channel, &sessions(&state, viewer))?;
             last_sent = Instant::now();
         }
         let generation = shared.generation.load(Ordering::Relaxed);
