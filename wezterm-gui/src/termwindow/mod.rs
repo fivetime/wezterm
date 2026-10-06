@@ -6,9 +6,9 @@ use crate::colorease::ColorEase;
 use crate::frontend::{front_end, try_front_end};
 use crate::inputmap::InputMap;
 use crate::overlay::{
-    confirm_close_pane, confirm_close_tab, confirm_close_window, confirm_quit_program, launcher,
-    start_overlay, start_overlay_pane, CopyModeParams, CopyOverlay, LauncherArgs, LauncherFlags,
-    QuickSelectOverlay,
+    confirm_close_pane, confirm_close_remote_tab, confirm_close_tab, confirm_close_window,
+    confirm_detach_or_close_tab, confirm_quit_program, launcher, start_overlay, start_overlay_pane,
+    CopyModeParams, CopyOverlay, LauncherArgs, LauncherFlags, QuickSelectOverlay,
 };
 use crate::resize_increment_calculator::ResizeIncrementCalculator;
 use crate::scripting::guiwin::GuiWin;
@@ -3461,6 +3461,9 @@ impl TermWindow {
         drop(mux_window);
 
         let tab_id = tab.tab_id();
+        if self.nativeterm_ask_before_close(tab_idx, &tab) {
+            return;
+        }
         if confirm && !tab.can_close_without_prompting(CloseReason::Tab) {
             if self.activate_tab(tab_idx as isize).is_err() {
                 return;
@@ -3477,6 +3480,37 @@ impl TermWindow {
         }
     }
 
+    /// Closing a tab remote control is on for (NativeTerm): asked first,
+    /// detach or close where its panes live in the mux server, close or
+    /// not where they are this GUI's own. Whether the question was put
+    /// (the tab, `tab_idx` in this window, shown for it).
+    fn nativeterm_ask_before_close(&mut self, tab_idx: usize, tab: &Arc<Tab>) -> bool {
+        let panes = tab.iter_panes_ignoring_zoom();
+        let server_ids: Vec<Option<PaneId>> = panes
+            .iter()
+            .map(|p| crate::server_pane_id(p.pane.pane_id()))
+            .collect();
+        let detachable = server_ids.iter().all(Option::is_some);
+        let remote = panes.iter().zip(&server_ids).any(|(p, server)| {
+            nativeterm_mirror::server::is_open(p.pane.pane_id())
+                || server.is_some_and(nativeterm_mirror::marks::is_open)
+        });
+        if !remote || self.activate_tab(tab_idx as isize).is_err() {
+            return false;
+        }
+        let window = self.window.clone().unwrap();
+        let (overlay, future) = start_overlay(self, tab, move |tab_id, term| {
+            if detachable {
+                confirm_detach_or_close_tab(tab_id, term, window)
+            } else {
+                confirm_close_remote_tab(tab_id, term, window)
+            }
+        });
+        self.assign_overlay(tab.tab_id(), overlay);
+        promise::spawn::spawn(future).detach();
+        true
+    }
+
     fn close_current_tab(&mut self, confirm: bool) {
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
@@ -3485,6 +3519,12 @@ impl TermWindow {
         };
         let tab_id = tab.tab_id();
         let mux_window_id = self.mux_window_id;
+        let index = mux
+            .get_window(mux_window_id)
+            .and_then(|w| w.get_tab_idx_for_id(tab_id));
+        if index.is_some_and(|i| self.nativeterm_ask_before_close(i, &tab)) {
+            return;
+        }
         if confirm && !tab.can_close_without_prompting(CloseReason::Tab) {
             let window = self.window.clone().unwrap();
             let (overlay, future) = start_overlay(self, &tab, move |tab_id, term| {

@@ -49,6 +49,69 @@ pub fn confirm_close_tab(
     Ok(())
 }
 
+/// Closing a tab that remote control is on for (NativeTerm), in a GUI
+/// whose panes live in the mux server: detach it (its panes go on in the
+/// server, the device keeps them) or close it (the device is
+/// disconnected). Detach is the default.
+pub fn confirm_detach_or_close_tab(
+    tab_id: TabId,
+    mut term: TermWizTerminal,
+    window: ::window::Window,
+) -> anyhow::Result<()> {
+    let choice = confirm::run_choice(
+        "📱 A device may be using this tab (remote control is on).\n\n\
+         Detach: the tab leaves this window and its programs go on; the \
+         device keeps it, and NativeTerm can bring it back.\n\
+         Close: its programs end and the device is disconnected.",
+        &[
+            ('d', "[D]etach"),
+            ('c', "[C]lose"),
+            ('\u{1b}', "Cancel (Esc)"),
+        ],
+        &mut term,
+    )?;
+    match choice {
+        // (the moves are the main thread's, and their futures not Send)
+        Some(0) => promise::spawn::spawn_into_main_thread(async move {
+            promise::spawn::spawn(async move {
+                if let Err(e) = crate::detach_tab(tab_id).await {
+                    log::error!("detaching tab {tab_id}: {e:#}");
+                }
+            })
+            .detach();
+        })
+        .detach(),
+        Some(1) => promise::spawn::spawn_into_main_thread(async move {
+            Mux::get().remove_tab(tab_id);
+        })
+        .detach(),
+        _ => {}
+    }
+    TermWindow::schedule_cancel_overlay(window, tab_id, None);
+    Ok(())
+}
+
+/// Closing a tab that remote control is on for, which can't be detached
+/// (its panes are this GUI's own): the device is disconnected.
+pub fn confirm_close_remote_tab(
+    tab_id: TabId,
+    mut term: TermWizTerminal,
+    window: ::window::Window,
+) -> anyhow::Result<()> {
+    if confirm::run_confirmation(
+        "📱 A device may be using this tab (remote control is on). Closing it \
+         ends its programs and disconnects the device. Close it?",
+        &mut term,
+    )? {
+        promise::spawn::spawn_into_main_thread(async move {
+            Mux::get().remove_tab(tab_id);
+        })
+        .detach();
+    }
+    TermWindow::schedule_cancel_overlay(window, tab_id, None);
+    Ok(())
+}
+
 pub fn confirm_close_window(
     mut term: TermWizTerminal,
     mux_window_id: WindowId,

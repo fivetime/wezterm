@@ -277,7 +277,17 @@ fn have_panes_in_domain_and_ws(domain: &Arc<dyn Domain>, workspace: &Option<Stri
         }
         false
     } else {
-        true
+        // (NativeTerm's detached tabs don't count: they are not shown)
+        mux.iter_windows().into_iter().any(|window_id| {
+            mux.get_window(window_id).is_some_and(|win| {
+                win.get_workspace() != nativeterm_mirror::DETACHED_WORKSPACE
+                    && win.iter_tabs().any(|t| {
+                        t.iter_panes_ignoring_zoom()
+                            .iter()
+                            .any(|p| p.pane.domain_id() == domain.domain_id())
+                    })
+            })
+        })
     }
 }
 
@@ -740,6 +750,40 @@ fn build_initial_mux(
         default_domain_name,
         default_workspace_name,
     )
+}
+
+/// NativeTerm's detach (R3): the tab's panes move to one window of the
+/// mux server's detached workspace, which no GUI shows; they go on
+/// there (remote control too, served by the server) until resumed. A
+/// split tab comes back as a tab per pane.
+pub async fn detach_tab(tab_id: mux::tab::TabId) -> anyhow::Result<()> {
+    let mux = Mux::get();
+    let tab = mux
+        .get_tab(tab_id)
+        .ok_or_else(|| anyhow::anyhow!("no tab {tab_id}"))?;
+    let panes: Vec<mux::pane::PaneId> = tab
+        .iter_panes_ignoring_zoom()
+        .iter()
+        .map(|p| p.pane.pane_id())
+        .collect();
+    let mut window = None;
+    for pane in panes {
+        let (_, w) = mux
+            .move_pane_to_new_tab(
+                pane,
+                window,
+                Some(nativeterm_mirror::DETACHED_WORKSPACE.to_string()),
+            )
+            .await?;
+        window = Some(w);
+        // the client's resync puts the pane in its new tab, and leaves it
+        // in the old one too: taken out there (not killed)
+        tab.remove_pane(pane);
+    }
+    if tab.is_dead() || tab.iter_panes_ignoring_zoom().is_empty() {
+        mux.remove_tab(tab_id);
+    }
+    Ok(())
 }
 
 /// The server's id of the pane a client pane shows (`connect`).

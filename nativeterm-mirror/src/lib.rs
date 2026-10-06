@@ -26,6 +26,11 @@ use termwiz::surface::{CursorVisibility, SequenceNo};
 use wezterm_term::color::ColorPalette;
 use wezterm_term::{CellAttributes, Line, StableRowIndex};
 
+/// The mux server's workspace for detached tabs (NativeTerm's R3): their
+/// panes live on in a window there, which no GUI shows; NativeTerm lists
+/// them, and resumes one by moving it back into a window of its own.
+pub const DETACHED_WORKSPACE: &str = "nativeterm-detached";
+
 /// Scrollback rows kept for devices, above the screen.
 pub const SCROLLBACK: usize = 2000;
 

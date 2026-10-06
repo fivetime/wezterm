@@ -145,6 +145,106 @@ fn run_confirmation_impl(message: &str, term: &mut TermWizTerminal) -> anyhow::R
     Ok(false)
 }
 
+/// `message` and a row of `buttons` (a key and a label each): the index
+/// of the one chosen, by its key, a click, or Enter for the first; `None`
+/// for Escape or a click elsewhere (NativeTerm's detach-or-close).
+pub fn run_choice(
+    message: &str,
+    buttons: &[(char, &str)],
+    term: &mut TermWizTerminal,
+) -> anyhow::Result<Option<usize>> {
+    term.set_raw_mode()?;
+    let size = term.get_screen_size()?;
+    let text_width = size.cols * 80 / 100;
+    let x_pos = size.cols * 10 / 100;
+    let wrapped = textwrap::fill(message, text_width);
+    let message_rows = wrapped.split('\n').count();
+    let top_row = size.rows.saturating_sub(message_rows + 2) / 2;
+    let button_row = top_row + message_rows + 1;
+    // each button's column and width
+    let mut spans = vec![];
+    let mut x = x_pos;
+    for (_, label) in buttons {
+        let w = label.chars().count() + 2;
+        spans.push((x, w));
+        x += w + 4;
+    }
+    let mut active: Option<usize> = None;
+
+    let render = |term: &mut TermWizTerminal, active: Option<usize>| -> anyhow::Result<()> {
+        let mut changes = vec![
+            Change::ClearScreen(ColorAttribute::Default),
+            Change::CursorVisibility(CursorVisibility::Hidden),
+        ];
+        for (y, row) in wrapped.split('\n').enumerate() {
+            changes.push(Change::CursorPosition {
+                x: Position::Absolute(x_pos),
+                y: Position::Absolute(top_row + y),
+            });
+            changes.push(Change::Text(row.trim_end().to_string()));
+        }
+        for (i, (_, label)) in buttons.iter().enumerate() {
+            changes.push(Change::CursorPosition {
+                x: Position::Absolute(spans[i].0),
+                y: Position::Absolute(button_row),
+            });
+            let on = active == Some(i);
+            if on {
+                changes.push(AttributeChange::Reverse(true).into());
+            }
+            changes.push(format!(" {label} ").into());
+            if on {
+                changes.push(AttributeChange::Reverse(false).into());
+            }
+        }
+        term.render(&changes)?;
+        term.flush()?;
+        Ok(())
+    };
+
+    render(term, active)?;
+    while let Ok(Some(event)) = term.poll_input(None) {
+        match event {
+            InputEvent::Key(KeyEvent {
+                key: KeyCode::Enter,
+                ..
+            }) => return Ok(Some(0)),
+            InputEvent::Key(KeyEvent {
+                key: KeyCode::Escape,
+                ..
+            }) => return Ok(None),
+            InputEvent::Key(KeyEvent {
+                key: KeyCode::Char(c),
+                ..
+            }) => {
+                if let Some(i) = buttons.iter().position(|(k, _)| k.eq_ignore_ascii_case(&c)) {
+                    return Ok(Some(i));
+                }
+            }
+            InputEvent::Mouse(MouseEvent {
+                x,
+                y,
+                mouse_buttons,
+                ..
+            }) => {
+                let (x, y) = (x as usize, y as usize);
+                active = spans
+                    .iter()
+                    .position(|(bx, bw)| y == button_row && x >= *bx && x < bx + bw);
+                if mouse_buttons == MouseButtons::LEFT && active.is_some() {
+                    return Ok(active);
+                }
+                if mouse_buttons != MouseButtons::NONE {
+                    return Ok(None);
+                }
+            }
+            _ => {}
+        }
+        render(term, active)?;
+    }
+    Ok(None)
+}
+
 pub fn show_confirmation_overlay(
     mut term: TermWizTerminal,
     args: Confirmation,

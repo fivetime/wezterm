@@ -388,6 +388,10 @@ impl GuiFrontEnd {
                 return promise.get_future().unwrap();
             }
             for workspace in mux.iter_workspaces() {
+                // (NativeTerm's detached tabs are shown only when resumed)
+                if workspace == nativeterm_mirror::DETACHED_WORKSPACE {
+                    continue;
+                }
                 if !mux.is_workspace_empty(&workspace) {
                     mux.set_active_workspace_for_client(&self.client_id, &workspace);
                     log::debug!("using {} instead, as it is not empty", workspace);
@@ -480,6 +484,26 @@ impl GuiFrontEnd {
         false
     }
 
+    /// No window left, and every workspace with windows is NativeTerm's
+    /// detached one (none at all is `MuxNotification::Empty`'s case).
+    fn only_detached_left(&self) -> bool {
+        if !self.known_windows.borrow().is_empty()
+            || !config::configuration().quit_when_all_windows_are_closed
+        {
+            return false;
+        }
+        let mux = Mux::get();
+        let busy: Vec<String> = mux
+            .iter_workspaces()
+            .into_iter()
+            .filter(|w| !mux.is_workspace_empty(w))
+            .collect();
+        !busy.is_empty()
+            && busy
+                .iter()
+                .all(|w| w == nativeterm_mirror::DETACHED_WORKSPACE)
+    }
+
     pub fn switch_workspace(&self, workspace: &str) {
         let mux = Mux::get();
         mux.set_active_workspace_for_client(&self.client_id, workspace);
@@ -498,6 +522,18 @@ impl GuiFrontEnd {
 
     pub fn forget_known_window(&self, window: &Window) {
         self.known_windows.borrow_mut().remove(window);
+        if self.only_detached_left() {
+            // the last window gone, and nothing but NativeTerm's detached
+            // tabs in the mux (which the server keeps): the GUI is done,
+            // as with nothing at all (`MuxNotification::Empty`)
+            promise::spawn::spawn_into_main_thread(async move {
+                if mux::activity::Activity::count() == 0 {
+                    Connection::get().unwrap().terminate_message_loop();
+                }
+            })
+            .detach();
+            return;
+        }
         if !self.is_switching_workspace() {
             self.reconcile_workspace();
         }
