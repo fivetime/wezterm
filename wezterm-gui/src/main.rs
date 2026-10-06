@@ -699,7 +699,7 @@ fn setup_mux(
         if serve_remote {
             nativeterm_mirror::server::start(dir);
         } else {
-            nativeterm_mirror::marks::watch(dir, gui_tab_of_server_pane);
+            nativeterm_mirror::marks::watch(dir, gui_tab_of_server_pane, gui_and_server_panes);
         }
     }
     let default_workspace_name = default_workspace_name.unwrap_or(
@@ -747,6 +747,18 @@ pub fn server_pane_id(pane: mux::pane::PaneId) -> Option<mux::pane::PaneId> {
     let pane = Mux::try_get()?.get_pane(pane)?;
     pane.downcast_ref::<wezterm_client::pane::ClientPane>()
         .map(|c| c.remote_pane_id())
+}
+
+/// Each of the GUI's panes shown from the mux server, with the server's
+/// id (`connect`).
+fn gui_and_server_panes() -> Vec<(mux::pane::PaneId, mux::pane::PaneId)> {
+    let Some(mux) = Mux::try_get() else {
+        return Vec::new();
+    };
+    mux.iter_panes()
+        .into_iter()
+        .filter_map(|p| server_pane_id(p.pane_id()).map(|s| (p.pane_id(), s)))
+        .collect()
 }
 
 /// The GUI's tab showing the server's pane `server_pane` (`connect`).
