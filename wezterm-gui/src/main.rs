@@ -776,12 +776,6 @@ pub async fn detach_tab(tab_id: mux::tab::TabId) -> anyhow::Result<()> {
             )
             .await?;
         window = Some(w);
-        // the client's resync puts the pane in its new tab, and leaves it
-        // in the old one too: taken out there (not killed)
-        tab.remove_pane(pane);
-    }
-    if tab.is_dead() || tab.iter_panes_ignoring_zoom().is_empty() {
-        mux.remove_tab(tab_id);
     }
     Ok(())
 }

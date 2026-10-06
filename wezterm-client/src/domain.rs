@@ -782,6 +782,9 @@ impl Domain for ClientDomain {
 
         let remote_window_id =
             window_id.and_then(|local_window| self.local_to_remote_window_id(local_window));
+        let old_tab = Mux::get()
+            .resolve_pane_id(pane_id)
+            .and_then(|(_, _, tab)| Mux::get().get_tab(tab));
 
         let result = inner
             .client
@@ -810,6 +813,16 @@ impl Domain for ClientDomain {
         let tab = Mux::get()
             .get_tab(local_tab_id)
             .ok_or_else(|| anyhow!("local tab {local_tab_id} is invalid"))?;
+
+        // (NativeTerm) the resync puts the pane in its new tab and leaves
+        // it in the old one too, which then shows a pane that has gone:
+        // taken out there (not killed), the old tab removed once empty
+        if let Some(old) = old_tab.filter(|old| old.tab_id() != local_tab_id) {
+            old.remove_pane(pane_id);
+            if old.iter_panes_ignoring_zoom().is_empty() {
+                Mux::get().remove_tab(old.tab_id());
+            }
+        }
 
         Ok(Some((tab, local_win_id)))
     }
