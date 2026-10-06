@@ -741,7 +741,27 @@ impl Reconnectable {
 
         let max_attempts = if no_auto_start { Some(1) } else { None };
 
-        let stream = match unix_connect_with_retry(&target, false, max_attempts) {
+        // NativeTerm: nothing there at all (no socket, or nobody listening
+        // on it) means the server is to be started now, not after ten
+        // tries that wait 2.25 s between them in all
+        let first = match &target {
+            UnixTarget::Socket(path) if !no_auto_start => Some(UnixStream::connect(path)),
+            _ => None,
+        };
+        let attempt = match first {
+            Some(Ok(stream)) => Ok(stream),
+            Some(Err(err))
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) =>
+            {
+                Err(anyhow::Error::from(err).context(format!("connecting to {:?}", target)))
+            }
+            _ => unix_connect_with_retry(&target, false, max_attempts),
+        };
+
+        let stream = match attempt {
             Ok(stream) => stream,
             Err(e) => {
                 if no_auto_start || unix_dom.no_serve_automatically || !initial {
