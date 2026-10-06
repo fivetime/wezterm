@@ -7,6 +7,10 @@
 //!   device resume <host:port> <desktop key hex> <key file> [name]
 //!
 //! The key file holds the device's key pair (made on pairing).
+//!
+//! `DEVICE_REQUESTS` (`hosts;resumable;open:<alias>;close:<session>;
+//! detach:<session>;resume:<id>`) are sent once welcomed, their answers
+//! printed; the example ends once all are answered.
 
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
@@ -84,6 +88,9 @@ fn main() -> anyhow::Result<()> {
     let started = Instant::now();
     let mut watching: Option<String> = None;
     let mut shown = 0u64;
+    let requests = std::env::var("DEVICE_REQUESTS").unwrap_or_default();
+    let mut asked = 0usize;
+    let mut answered = 0usize;
     loop {
         let bytes = match binary(&mut ws) {
             Ok(b) => b,
@@ -121,6 +128,59 @@ fn main() -> anyhow::Result<()> {
         }
         if welcomed {
             println!("welcomed, protocol {:?}", device.version());
+            for r in requests.split(';').filter(|r| !r.is_empty()) {
+                let (what, arg) = r.split_once(':').unwrap_or((r, ""));
+                let made = match what {
+                    "hosts" => device.list_hosts(),
+                    "resumable" => device.list_resumable(),
+                    "open" => device.open_tab(arg),
+                    "close" => device.close_tab(arg, false),
+                    "detach" => device.close_tab(arg, true),
+                    "resume" => device.resume(arg),
+                    _ => anyhow::bail!("not a request: {r}"),
+                };
+                match made {
+                    Ok((id, frame)) => {
+                        println!("request {id}: {r}");
+                        send(&mut ws, &mut channel, &frame)?;
+                        asked += 1;
+                    }
+                    Err(_) => println!("request {r}: the desktop takes none"),
+                }
+            }
+        }
+        if device.take_lists_changed() {
+            if let Some(hosts) = device.hosts() {
+                println!(
+                    "hosts: {:?}",
+                    hosts
+                        .iter()
+                        .map(|h| (&h.alias, &h.folder, h.kept))
+                        .collect::<Vec<_>>()
+                );
+            }
+            if let Some(tabs) = device.resumable() {
+                println!(
+                    "resumable: {:?}",
+                    tabs.iter()
+                        .map(|t| (&t.id, &t.title, t.kind))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+        for r in device.take_results() {
+            answered += 1;
+            println!(
+                "result {}: ok={} error={:?} session={:?} ({:.1}s)",
+                r.id,
+                r.ok,
+                r.error,
+                r.session,
+                started.elapsed().as_secs_f32()
+            );
+            if asked > 0 && answered >= asked {
+                return Ok(());
+            }
         }
         for ended in device.take_ended() {
             println!("ended: {ended}");

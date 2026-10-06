@@ -857,6 +857,8 @@ pub(crate) fn session<L: Link>(
     let mut rows_sent = Instant::now() - FRAME;
     // a direct connection offered: its answer, while it is being made
     let mut direct: Option<std::sync::mpsc::Receiver<String>> = None;
+    // tabs opened, closed, brought back: handed to NativeTerm
+    let mut tabs = crate::tabs::Tabs::default();
     loop {
         if let Some(answer) = direct.as_ref().map(|r| r.try_recv()) {
             match answer {
@@ -963,6 +965,14 @@ pub(crate) fn session<L: Link>(
                                 }
                             }
                         }
+                        Some(Body::Request(request)) if welcomed => {
+                            let device = hex(&device);
+                            for frame in tabs.take(&shared.dir, id, &device, request, viewer, &open)
+                            {
+                                send(&mut ws, &mut channel, &frame)?;
+                                last_sent = Instant::now();
+                            }
+                        }
                         Some(Body::DirectOffer(offer)) if welcomed && direct.is_none() => {
                             direct = Some(crate::direct::answer(shared, offer.sdp));
                         }
@@ -1009,6 +1019,11 @@ pub(crate) fn session<L: Link>(
         }
         if !welcomed {
             continue;
+        }
+        // NativeTerm's answers to this device's requests
+        for frame in tabs.answers(&shared.dir) {
+            send(&mut ws, &mut channel, &frame)?;
+            last_sent = Instant::now();
         }
         // the sessions open now; one closed (or turned off) ends
         let state = shared.state();
