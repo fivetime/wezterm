@@ -240,8 +240,9 @@ fn run() -> anyhow::Result<()> {
     let domain: Arc<dyn Domain> = Arc::new(LocalDomain::new("local")?);
     let mux = Arc::new(mux::Mux::new(Some(domain.clone())));
     Mux::set_mux(&mux);
-    if let Some(dir) = NATIVETERM_REMOTE_DIR.get().cloned().flatten() {
-        nativeterm_mirror::server::start(dir);
+    // started by NativeTerm: its remote control served these panes
+    if NATIVETERM_REMOTE_DIR.get().cloned().flatten().is_some() {
+        nativeterm_mirror::agent::start();
     }
 
     let executor = promise::spawn::SimpleExecutor::new();

@@ -2,13 +2,7 @@
 //! would: text as typed (an input method's result), a paste through the
 //! pane's paste (bracketed when the program asked for it), a key by name
 //! encoded by WezTerm for the pane's modes (application cursor keys, the
-//! kitty keyboard protocol, ...). Recorded in `input.log` beside
-//! `state.json`: which device, which pane, what kind, the key's name;
-//! never the text (a password typed into a terminal is not echoed, and
-//! the log must not keep it either).
-
-use std::io::Write;
-use std::path::Path;
+//! kitty keyboard protocol, ...). (NativeTerm keeps the log of it.)
 
 use mux::pane::Pane;
 use native_term_remote::keys;
@@ -109,62 +103,9 @@ pub fn apply(pane: &dyn Pane, kind: &Kind) -> Reason {
     Reason::Applied
 }
 
-/// What the log says of an input: its kind and size, a key's name.
-pub fn describe(kind: &Kind) -> String {
-    match kind {
-        Kind::Text(text) => format!("text, {} characters", text.chars().count()),
-        Kind::Paste(text) => format!("paste, {} characters", text.chars().count()),
-        Kind::Mouse(m) => format!(
-            "mouse {:?} {:?} at {},{}",
-            m.kind(),
-            m.button(),
-            m.row,
-            m.col
-        ),
-        Kind::Key(key) => {
-            let mut name = String::new();
-            for (bit, label) in [
-                (keys::CTRL, "Ctrl+"),
-                (keys::ALT, "Alt+"),
-                (keys::SHIFT, "Shift+"),
-                (keys::SUPER, "Super+"),
-            ] {
-                if key.mods & bit != 0 {
-                    name.push_str(label);
-                }
-            }
-            name.push_str(&key.name);
-            format!("key {name}")
-        }
-    }
-}
-
-/// One line in `input.log`.
-pub fn record(dir: &Path, device: &str, pane: &str, kind: &Kind, reason: Reason) {
-    let when = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let outcome = match reason {
-        Reason::Applied => "",
-        Reason::ReadOnly => " (refused: read only)",
-        Reason::NoSession => " (refused: no such session)",
-        Reason::UnknownKey => " (refused: unknown key)",
-    };
-    let line = format!("{when} {device} {pane} {}{outcome}\n", describe(kind));
-    let written = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("input.log"))
-        .and_then(|mut f| f.write_all(line.as_bytes()));
-    if let Err(e) = written {
-        log::debug!("nativeterm remote control: input.log: {e}");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use native_term_remote::proto::Key;
 
     #[test]
     fn every_protocol_key_has_a_code() {
@@ -179,16 +120,5 @@ mod tests {
             modifiers(keys::CTRL | keys::SHIFT),
             KeyModifiers::CTRL | KeyModifiers::SHIFT
         );
-    }
-
-    #[test]
-    fn the_log_never_has_the_text() {
-        let typed = describe(&Kind::Text("hunter2".into()));
-        assert_eq!(typed, "text, 7 characters");
-        let key = Key {
-            name: "c".into(),
-            mods: keys::CTRL,
-        };
-        assert_eq!(describe(&Kind::Key(key)), "key Ctrl+c");
     }
 }

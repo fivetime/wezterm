@@ -9,12 +9,9 @@
 //! palette as the desktop draws them) and gives them to the mirror, which
 //! numbers what changed for the devices.
 
-mod direct;
+pub mod agent;
 pub mod input;
 pub mod marks;
-mod relay;
-pub mod server;
-mod tabs;
 
 use std::ops::Range;
 

@@ -3,28 +3,20 @@ name = "nativeterm-mirror"
 version = "0.1.0"
 edition = "2021"
 publish = false
-description = "NativeTerm's remote control: a pane's screen kept as native-term-remote's Mirror, read through the mux, and served on the LAN"
+description = "NativeTerm's remote control, the terminal's side: a pane's screen kept as native-term-remote's Mirror, read through the mux, served to NativeTerm (its agent on NativeTerm's pipe)"
 
 [dependencies]
 anyhow.workspace = true
-httparse = "1.10"
 log.workspace = true
 mux.workspace = true
 promise.workspace = true
 native-term-remote.workspace = true
-native-term-p2p.workspace = true
+native-term-session.workspace = true
 rangeset.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 termwiz.workspace = true
-tungstenite = { version = "0.30", default-features = false, features = ["handshake", "native-tls"] }
 wezterm-term.workspace = true
 
 [dev-dependencies]
-# the pairing secret in examples/serve.rs
-getrandom.workspace = true
 tempfile.workspace = true
-# NativeTerm's relay, run in a test (tests/through_relay.rs)
-native-term-server = { path = "../../NativeTerm/crates/native-term-server" }
-tokio = { version = "1", features = ["rt-multi-thread", "net"] }
-

@@ -702,15 +702,14 @@ fn setup_mux(
         .as_ref()
         .map(std::path::PathBuf::from)
         .or_else(|| NATIVETERM_REMOTE_DIR.get().cloned().flatten());
-    // (with `connect` the panes, and so the service, are in the mux
-    // server: this GUI only marks its tabs, from the state NativeTerm
-    // writes)
+    // remote control is NativeTerm's: the panes' agent where they are here
+    // (with `connect` they are in the mux server, its agent), and the tabs
+    // marked from the state NativeTerm writes
     if let Some(dir) = remote_dir {
         if serve_remote {
-            nativeterm_mirror::server::start(dir);
-        } else {
-            nativeterm_mirror::marks::watch(dir, gui_tab_of_server_pane, gui_and_server_panes);
+            nativeterm_mirror::agent::start();
         }
+        nativeterm_mirror::marks::watch(dir, gui_tab_of_server_pane, gui_and_server_panes);
     }
     let default_workspace_name = default_workspace_name.unwrap_or(
         config
@@ -802,11 +801,19 @@ fn gui_and_server_panes() -> Vec<(mux::pane::PaneId, mux::pane::PaneId)> {
 /// The GUI's tab showing the server's pane `server_pane` (`connect`).
 fn gui_tab_of_server_pane(server_pane: mux::pane::PaneId) -> Option<mux::tab::TabId> {
     let mux = Mux::try_get()?;
+    // (the GUI's own panes are known by their own ids)
     let local = mux
         .iter_panes()
         .into_iter()
-        .find(|p| server_pane_id(p.pane_id()) == Some(server_pane))?;
-    mux.resolve_pane_id(local.pane_id()).map(|(_, _, tab)| tab)
+        .find(|p| server_pane_id(p.pane_id()) == Some(server_pane))
+        .map_or(server_pane, |p| p.pane_id());
+    mux.resolve_pane_id(local).map(|(_, _, tab)| tab)
+}
+
+/// The id remote control knows the GUI's pane `pane` by: the mux server's
+/// with `connect`, else its own.
+pub fn remote_pane_id(pane: mux::pane::PaneId) -> mux::pane::PaneId {
+    server_pane_id(pane).unwrap_or(pane)
 }
 
 fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> anyhow::Result<()> {

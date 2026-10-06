@@ -15,7 +15,16 @@ use mux::pane::PaneId;
 use mux::tab::TabId;
 use mux::{Mux, MuxNotification};
 
-use crate::server::State;
+/// What the marks need of `state.json` (NativeTerm writes it).
+#[derive(Default, serde::Deserialize)]
+struct State {
+    /// Panes open to remote control.
+    #[serde(default)]
+    sessions: Vec<PaneId>,
+    /// Panes kept in tmux on their server.
+    #[serde(default)]
+    kept: Vec<PaneId>,
+}
 
 /// The server's pane ids open to remote control, as last read.
 static OPEN: Mutex<Option<HashSet<PaneId>>> = Mutex::new(None);

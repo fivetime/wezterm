@@ -3492,14 +3492,12 @@ impl TermWindow {
             .collect();
         let detachable = server_ids.iter().all(Option::is_some);
         let remote = panes.iter().zip(&server_ids).any(|(p, server)| {
-            nativeterm_mirror::server::is_open(p.pane.pane_id())
-                || server.is_some_and(nativeterm_mirror::marks::is_open)
+            nativeterm_mirror::marks::is_open(server.unwrap_or(p.pane.pane_id()))
         });
         // (in tmux on the server it is logged into: closing ends nothing
         // there)
         let kept = panes.iter().zip(&server_ids).any(|(p, server)| {
-            nativeterm_mirror::server::is_kept(p.pane.pane_id())
-                || server.is_some_and(nativeterm_mirror::marks::is_kept)
+            nativeterm_mirror::marks::is_kept(server.unwrap_or(p.pane.pane_id()))
         });
         if !remote || self.activate_tab(tab_idx as isize).is_err() {
             return false;
