@@ -55,14 +55,24 @@ pub fn confirm_close_tab(
 /// disconnected). Detach is the default.
 pub fn confirm_detach_or_close_tab(
     tab_id: TabId,
+    kept: bool,
     mut term: TermWizTerminal,
     window: ::window::Window,
 ) -> anyhow::Result<()> {
-    let choice = confirm::run_choice(
+    let message = if kept {
+        "📱 A device may be using this tab (remote control is on).\n\n\
+         Detach: the tab leaves this window and its connection goes on; the \
+         device keeps it, and NativeTerm can bring it back.\n\
+         Close: the connection ends and the device is disconnected; the \
+         programs stay in tmux on the server, to be reopened."
+    } else {
         "📱 A device may be using this tab (remote control is on).\n\n\
          Detach: the tab leaves this window and its programs go on; the \
          device keeps it, and NativeTerm can bring it back.\n\
-         Close: its programs end and the device is disconnected.",
+         Close: its programs end and the device is disconnected."
+    };
+    let choice = confirm::run_choice(
+        message,
         &[
             ('d', "[D]etach"),
             ('c', "[C]lose"),
@@ -95,14 +105,19 @@ pub fn confirm_detach_or_close_tab(
 /// (its panes are this GUI's own): the device is disconnected.
 pub fn confirm_close_remote_tab(
     tab_id: TabId,
+    kept: bool,
     mut term: TermWizTerminal,
     window: ::window::Window,
 ) -> anyhow::Result<()> {
-    if confirm::run_confirmation(
+    let message = if kept {
         "📱 A device may be using this tab (remote control is on). Closing it \
-         ends its programs and disconnects the device. Close it?",
-        &mut term,
-    )? {
+         disconnects the device; the programs stay in tmux on the server, to \
+         be reopened. Close it?"
+    } else {
+        "📱 A device may be using this tab (remote control is on). Closing it \
+         ends its programs and disconnects the device. Close it?"
+    };
+    if confirm::run_confirmation(message, &mut term)? {
         promise::spawn::spawn_into_main_thread(async move {
             Mux::get().remove_tab(tab_id);
         })

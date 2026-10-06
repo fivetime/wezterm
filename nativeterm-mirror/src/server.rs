@@ -148,6 +148,11 @@ pub struct State {
     /// Pane ids open to remote control.
     #[serde(default)]
     pub sessions: Vec<PaneId>,
+    /// Panes whose programs are kept on the server they are logged into
+    /// (tmux, NativeTerm's persistent sessions): closing one ends nothing
+    /// there.
+    #[serde(default)]
+    pub kept: Vec<PaneId>,
     #[serde(default)]
     pub pairing: Option<Pairing>,
     /// The web client's files.
@@ -347,6 +352,14 @@ pub fn is_open(pane: PaneId) -> bool {
     SERVING
         .get()
         .is_some_and(|shared| shared.state().sessions.contains(&pane))
+}
+
+/// Whether the pane's programs are kept on the server it is logged into
+/// (NativeTerm says so in `state.json`).
+pub fn is_kept(pane: PaneId) -> bool {
+    SERVING
+        .get()
+        .is_some_and(|shared| shared.state().kept.contains(&pane))
 }
 
 /// The tabs whose panes were opened or closed to remote control are told

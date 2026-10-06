@@ -3495,15 +3495,21 @@ impl TermWindow {
             nativeterm_mirror::server::is_open(p.pane.pane_id())
                 || server.is_some_and(nativeterm_mirror::marks::is_open)
         });
+        // (in tmux on the server it is logged into: closing ends nothing
+        // there)
+        let kept = panes.iter().zip(&server_ids).any(|(p, server)| {
+            nativeterm_mirror::server::is_kept(p.pane.pane_id())
+                || server.is_some_and(nativeterm_mirror::marks::is_kept)
+        });
         if !remote || self.activate_tab(tab_idx as isize).is_err() {
             return false;
         }
         let window = self.window.clone().unwrap();
         let (overlay, future) = start_overlay(self, tab, move |tab_id, term| {
             if detachable {
-                confirm_detach_or_close_tab(tab_id, term, window)
+                confirm_detach_or_close_tab(tab_id, kept, term, window)
             } else {
-                confirm_close_remote_tab(tab_id, term, window)
+                confirm_close_remote_tab(tab_id, kept, term, window)
             }
         });
         self.assign_overlay(tab.tab_id(), overlay);

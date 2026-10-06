@@ -19,6 +19,17 @@ use crate::server::State;
 
 /// The server's pane ids open to remote control, as last read.
 static OPEN: Mutex<Option<HashSet<PaneId>>> = Mutex::new(None);
+/// The server's pane ids whose programs are kept on the server they are
+/// logged into (tmux), as last read.
+static KEPT: Mutex<Option<HashSet<PaneId>>> = Mutex::new(None);
+
+/// Whether the server's pane `server_pane` runs in tmux on its server.
+pub fn is_kept(server_pane: PaneId) -> bool {
+    KEPT.lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|kept| kept.contains(&server_pane))
+}
 
 /// Whether the server's pane `server_pane` is open to remote control.
 pub fn is_open(server_pane: PaneId) -> bool {
@@ -56,6 +67,7 @@ pub fn watch(
                         .ok()
                         .and_then(|t| serde_json::from_str(&t).ok())
                         .unwrap_or_default();
+                    *KEPT.lock().unwrap() = Some(state.kept.iter().copied().collect());
                     let now: HashSet<PaneId> = state.sessions.into_iter().collect();
                     *OPEN.lock().unwrap() = Some(now.clone());
                     if let Some(mux) = Mux::try_get() {
