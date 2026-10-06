@@ -253,7 +253,12 @@ fn compute_tab_title(
                 }
 
                 // NativeTerm: a tab open to remote control carries a mark
-                if nativeterm_mirror::server::is_open(pane.pane_id) {
+                // (a pane shown from the mux server is known there by
+                // the server's id)
+                let open = nativeterm_mirror::server::is_open(pane.pane_id)
+                    || crate::server_pane_id(pane.pane_id)
+                        .is_some_and(nativeterm_mirror::marks::is_open);
+                if open {
                     let mark = "\u{25cf} ".to_string();
                     len += unicode_column_width(&mark, None);
                     items.push(FormatItem::Foreground(FormatColor::AnsiColor(

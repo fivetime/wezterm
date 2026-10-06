@@ -63,7 +63,18 @@ struct Opt {
     prog: Vec<OsString>,
 }
 
+/// Where NativeTerm keeps remote control's state, when it started this
+/// server (`NATIVETERM_REMOTE_DIR`; taken out of the environment before
+/// any pane starts, so the shells don't inherit it, but not before
+/// `--daemonize` has started the copy that stays, which needs it too):
+/// the service runs here, where the panes are, detached ones too.
+static NATIVETERM_REMOTE_DIR: std::sync::OnceLock<Option<std::path::PathBuf>> =
+    std::sync::OnceLock::new();
+
 fn main() {
+    let remote_dir = std::env::var_os("NATIVETERM_REMOTE_DIR").filter(|d| !d.is_empty());
+    let _ = NATIVETERM_REMOTE_DIR.set(remote_dir.map(std::path::PathBuf::from));
+
     if let Err(err) = run() {
         wezterm_blob_leases::clear_storage();
         log::error!("{:#}", err);
@@ -196,6 +207,8 @@ fn run() -> anyhow::Result<()> {
         "SHLVL",
         "WEZTERM_PANE",
         "WEZTERM_UNIX_SOCKET",
+        // NativeTerm's, kept in NATIVETERM_REMOTE_DIR (the static)
+        "NATIVETERM_REMOTE_DIR",
         "_",
     ] {
         std::env::remove_var(name);
@@ -227,6 +240,9 @@ fn run() -> anyhow::Result<()> {
     let domain: Arc<dyn Domain> = Arc::new(LocalDomain::new("local")?);
     let mux = Arc::new(mux::Mux::new(Some(domain.clone())));
     Mux::set_mux(&mux);
+    if let Some(dir) = NATIVETERM_REMOTE_DIR.get().cloned().flatten() {
+        nativeterm_mirror::server::start(dir);
+    }
 
     let executor = promise::spawn::SimpleExecutor::new();
 

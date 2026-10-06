@@ -186,7 +186,7 @@ fn run_ssh(opts: SshCommand) -> anyhow::Result<()> {
         set_window_position(pos.clone());
     }
 
-    build_initial_mux(&config::configuration(), None, None)?;
+    build_initial_mux(true, &config::configuration(), None, None)?;
 
     let gui = crate::frontend::try_new()?;
 
@@ -237,7 +237,7 @@ fn run_serial(config: config::ConfigHandle, opts: SerialCommand) -> anyhow::Resu
         set_window_position(pos.clone());
     }
 
-    build_initial_mux(&config, None, None)?;
+    build_initial_mux(true, &config, None, None)?;
 
     let gui = crate::frontend::try_new()?;
 
@@ -674,6 +674,7 @@ fn spawn_mux_server(unix_socket_path: PathBuf, should_publish: bool) -> anyhow::
 }
 
 fn setup_mux(
+    serve_remote: bool,
     local_domain: Arc<dyn Domain>,
     config: &ConfigHandle,
     default_domain_name: Option<&str>,
@@ -691,8 +692,15 @@ fn setup_mux(
         .as_ref()
         .map(std::path::PathBuf::from)
         .or_else(|| NATIVETERM_REMOTE_DIR.get().cloned().flatten());
+    // (with `connect` the panes, and so the service, are in the mux
+    // server: this GUI only marks its tabs, from the state NativeTerm
+    // writes)
     if let Some(dir) = remote_dir {
-        nativeterm_mirror::server::start(dir);
+        if serve_remote {
+            nativeterm_mirror::server::start(dir);
+        } else {
+            nativeterm_mirror::marks::watch(dir, gui_tab_of_server_pane);
+        }
     }
     let default_workspace_name = default_workspace_name.unwrap_or(
         config
@@ -719,12 +727,36 @@ fn setup_mux(
 }
 
 fn build_initial_mux(
+    serve_remote: bool,
     config: &ConfigHandle,
     default_domain_name: Option<&str>,
     default_workspace_name: Option<&str>,
 ) -> anyhow::Result<Arc<Mux>> {
     let domain: Arc<dyn Domain> = Arc::new(LocalDomain::new("local")?);
-    setup_mux(domain, config, default_domain_name, default_workspace_name)
+    setup_mux(
+        serve_remote,
+        domain,
+        config,
+        default_domain_name,
+        default_workspace_name,
+    )
+}
+
+/// The server's id of the pane a client pane shows (`connect`).
+pub fn server_pane_id(pane: mux::pane::PaneId) -> Option<mux::pane::PaneId> {
+    let pane = Mux::try_get()?.get_pane(pane)?;
+    pane.downcast_ref::<wezterm_client::pane::ClientPane>()
+        .map(|c| c.remote_pane_id())
+}
+
+/// The GUI's tab showing the server's pane `server_pane` (`connect`).
+fn gui_tab_of_server_pane(server_pane: mux::pane::PaneId) -> Option<mux::tab::TabId> {
+    let mux = Mux::try_get()?;
+    let local = mux
+        .iter_panes()
+        .into_iter()
+        .find(|p| server_pane_id(p.pane_id()) == Some(server_pane))?;
+    mux.resolve_pane_id(local.pane_id()).map(|(_, _, tab)| tab)
 }
 
 fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> anyhow::Result<()> {
@@ -758,6 +790,7 @@ fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> 
     };
 
     let mux = build_initial_mux(
+        !opts.attach,
         &config,
         default_domain_name.as_deref(),
         opts.workspace.as_deref(),

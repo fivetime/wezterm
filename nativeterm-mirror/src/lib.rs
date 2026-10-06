@@ -11,6 +11,7 @@
 
 mod direct;
 pub mod input;
+pub mod marks;
 mod relay;
 pub mod server;
 
