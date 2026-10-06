@@ -8403,6 +8403,7 @@ dependencies = [
  "log",
  "mlua",
  "mux",
+ "nativeterm-mirror",
  "openssl",
  "portable-pty",
  "promise",
