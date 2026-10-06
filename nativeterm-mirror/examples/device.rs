@@ -179,11 +179,25 @@ fn main() -> anyhow::Result<()> {
                 started.elapsed().as_secs_f32()
             );
             if asked > 0 && answered >= asked {
-                return Ok(());
+                // (`DEVICE_LINGER` seconds more of what comes, for a
+                // session opened just now)
+                let linger: u64 = std::env::var("DEVICE_LINGER").ok().and_then(|l| l.parse().ok()).unwrap_or(0);
+                if linger == 0 {
+                    return Ok(());
+                }
+                if let (Some(open), true) = (r.session.parse::<u64>().ok(), r.ok) {
+                    if let Some(f) = device.watch(&open.to_string()) {
+                        println!("watching {open}");
+                        watching = Some(open.to_string());
+                        send(&mut ws, &mut channel, &f)?;
+                    }
+                }
+                ws.get_mut().set_read_timeout(Some(Duration::from_secs(linger)))?;
+                asked = 0;
             }
         }
         for ended in device.take_ended() {
-            println!("ended: {ended}");
+            println!("ended: {ended} ({:.1}s)", started.elapsed().as_secs_f32());
         }
         if let Some(copy) = watching.as_deref().and_then(|s| device.screen(s)) {
             if copy.seq != shown && copy.lines > 0 {

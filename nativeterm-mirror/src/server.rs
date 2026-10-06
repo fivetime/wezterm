@@ -729,11 +729,19 @@ fn sessions(state: &State, viewer: bool) -> Frame {
         .sessions
         .iter()
         .filter_map(|id| {
-            let pane = mux.as_ref()?.get_pane(*id)?;
+            let mux = mux.as_ref()?;
+            let pane = mux.get_pane(*id)?;
             let dims = pane.get_dimensions();
+            // the tab's own title where one was set (NativeTerm's label),
+            // else what the program in it says
+            let tab_title = mux
+                .resolve_pane_id(*id)
+                .and_then(|(_, _, tab)| mux.get_tab(tab))
+                .map(|tab| tab.get_title())
+                .filter(|t| !t.is_empty());
             Some(SessionInfo {
                 id: id.to_string(),
-                title: pane.get_title(),
+                title: tab_title.unwrap_or_else(|| pane.get_title()),
                 cols: dims.cols as u32,
                 lines: dims.viewport_rows as u32,
                 read_only: viewer || state.read_only.contains(id),

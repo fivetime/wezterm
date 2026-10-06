@@ -55,6 +55,8 @@ struct Answer {
     error: String,
     #[serde(default)]
     session: String,
+    #[serde(default)]
+    code: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -92,6 +94,18 @@ fn result(id: u64, ok: bool, error: impl Into<String>, session: impl Into<String
         ok,
         error: error.into(),
         session: session.into(),
+        reason: String::new(),
+    }))
+}
+
+/// A refusal, with the word clients translate.
+fn refused(id: u64, reason: &str, error: impl Into<String>) -> Frame {
+    wire::frame(Body::RequestResult(RequestResult {
+        id,
+        ok: false,
+        error: error.into(),
+        session: String::new(),
+        reason: reason.to_string(),
     }))
 }
 
@@ -115,12 +129,16 @@ impl Tabs {
                 self.resumable_sent = Some(modified(dir));
                 return vec![resumable(dir), result(id, true, "", "")];
             }
-            _ if viewer => return vec![result(id, false, "this device may only see", "")],
+            _ if viewer => return vec![refused(id, "view_only", "this device may only see")],
             Some(Kind::OpenTab(o)) if !o.host.is_empty() => What::Open { host: o.host },
             Some(Kind::CloseTab(c)) => {
                 // only a session this device sees
                 if !c.session.parse::<PaneId>().is_ok_and(|p| open.contains(&p)) {
-                    return vec![result(id, false, format!("no session {}", c.session), "")];
+                    return vec![refused(
+                        id,
+                        "no_session",
+                        format!("no session {}", c.session),
+                    )];
                 }
                 What::Close {
                     session: c.session,
@@ -128,7 +146,13 @@ impl Tabs {
                 }
             }
             Some(Kind::Resume(r)) if !r.id.is_empty() => What::Resume { tab: r.id },
-            _ => return vec![result(id, false, "not a request this desktop knows", "")],
+            _ => {
+                return vec![refused(
+                    id,
+                    "unknown_request",
+                    "not a request this desktop knows",
+                )]
+            }
         };
         let name = format!("{conn}-{id}");
         let handed = Handed {
@@ -142,11 +166,10 @@ impl Tabs {
                 self.waiting.push((name, id, Instant::now()));
                 Vec::new()
             }
-            Err(e) => vec![result(
+            Err(e) => vec![refused(
                 id,
-                false,
+                "failed",
                 format!("not handed to NativeTerm: {e}"),
-                "",
             )],
         }
     }
@@ -161,12 +184,18 @@ impl Tabs {
             if let Ok(text) = std::fs::read_to_string(&path) {
                 let _ = std::fs::remove_file(&path);
                 let answer: Answer = serde_json::from_str(&text).unwrap_or_default();
-                frames.push(result(*id, answer.ok, answer.error, answer.session));
+                frames.push(wire::frame(Body::RequestResult(RequestResult {
+                    id: *id,
+                    ok: answer.ok,
+                    error: answer.error,
+                    session: answer.session,
+                    reason: answer.code,
+                })));
                 return false;
             }
             if at.elapsed() >= ANSWER_WITHIN {
                 let _ = std::fs::remove_file(dir.join(REQUESTS).join(format!("{name}.json")));
-                frames.push(result(*id, false, "NativeTerm did not answer", ""));
+                frames.push(refused(*id, "not_answered", "NativeTerm did not answer"));
                 return false;
             }
             true
