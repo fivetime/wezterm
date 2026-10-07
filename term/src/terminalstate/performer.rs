@@ -773,6 +773,11 @@ impl<'a> Performer<'a> {
             OperatingSystemCommand::SetHyperlink(link) => {
                 self.set_hyperlink(link);
             }
+            OperatingSystemCommand::Unspecified(unspec)
+                if unspec.first().map(Vec::as_slice) == Some(b"99") =>
+            {
+                self.kitty_notification(&unspec[1..]);
+            }
             OperatingSystemCommand::Unspecified(unspec) => {
                 if self.config.log_unknown_escape_sequences() {
                     let mut output = String::new();
@@ -899,11 +904,23 @@ impl<'a> Performer<'a> {
                 FinalTermSemanticPrompt::MarkEndOfInputAndStartOfOutput { .. },
             ) => {
                 self.pen.set_semantic_type(SemanticType::Output);
+                self.command_started = Some(std::time::Instant::now());
             }
 
             OperatingSystemCommand::FinalTermSemanticPrompt(
-                FinalTermSemanticPrompt::CommandStatus { .. },
-            ) => {}
+                FinalTermSemanticPrompt::CommandStatus { status, .. },
+            ) => {
+                // a command the shell said began (a `D` alone, after a
+                // prompt that ran nothing, is no command)
+                if let Some(started) = self.command_started.take() {
+                    if let Some(handler) = self.alert_handler.as_mut() {
+                        handler.alert(Alert::CommandFinished {
+                            status,
+                            millis: started.elapsed().as_millis() as u64,
+                        });
+                    }
+                }
+            }
 
             OperatingSystemCommand::SystemNotification(message) => {
                 if let Some(handler) = self.alert_handler.as_mut() {
@@ -1109,5 +1126,85 @@ fn selection_to_selection(sel: Selection) -> ClipboardSelection {
         // also use the same fallback configuration as NONE,
         // if/when we add it
         _ => ClipboardSelection::Clipboard,
+    }
+}
+
+/// OSC 99 notifications (kitty's desktop notifications protocol): kept
+/// to a few at once, and to so much text each.
+const KITTY_NOTIFICATIONS_MAX: usize = 16;
+const KITTY_TEXT_MAX: usize = 1024;
+
+impl<'a> Performer<'a> {
+    /// OSC 99: `99 ; metadata ; payload`. The metadata is `key=value`
+    /// pairs joined by `:`: `i` the notification's identifier, `d=0` more
+    /// chunks to come (`1`, the default: done), `p` what the payload is
+    /// (`title`, the default, or `body`; the rest, and queries, are not
+    /// done here), `e=1` the payload in base64. Done, it is a
+    /// `ToastNotification` like OSC 9's and 777's.
+    fn kitty_notification(&mut self, params: &[Vec<u8>]) {
+        let metadata = params
+            .first()
+            .map(|m| String::from_utf8_lossy(m).to_string())
+            .unwrap_or_default();
+        // (the payload may hold `;`: the parser split it)
+        let payload = params.get(1..).unwrap_or(&[]).join(&b';');
+        let mut id = String::new();
+        let mut done = true;
+        let mut kind = "title".to_string();
+        let mut base64 = false;
+        for pair in metadata.split(':') {
+            match pair.split_once('=') {
+                Some(("i", v)) => id = v.to_string(),
+                Some(("d", v)) => done = v != "0",
+                Some(("p", v)) => kind = v.to_string(),
+                Some(("e", v)) => base64 = v == "1",
+                _ => {}
+            }
+        }
+        if kind != "title" && kind != "body" {
+            return;
+        }
+        let text = if base64 {
+            use base64::Engine;
+            match base64::engine::general_purpose::STANDARD.decode(&payload) {
+                Ok(bytes) => String::from_utf8_lossy(&bytes).to_string(),
+                Err(_) => return,
+            }
+        } else {
+            String::from_utf8_lossy(&payload).to_string()
+        };
+        if !self.kitty_notifications.contains_key(&id)
+            && self.kitty_notifications.len() >= KITTY_NOTIFICATIONS_MAX
+        {
+            self.kitty_notifications.clear();
+        }
+        let entry = self.kitty_notifications.entry(id.clone()).or_default();
+        let into = if kind == "title" {
+            &mut entry.0
+        } else {
+            &mut entry.1
+        };
+        let room = KITTY_TEXT_MAX.saturating_sub(into.chars().count());
+        into.extend(text.chars().take(room));
+        if !done {
+            return;
+        }
+        let Some((title, body)) = self.kitty_notifications.remove(&id) else {
+            return;
+        };
+        let (title, body) = match (title.is_empty(), body.is_empty()) {
+            (true, true) => return,
+            // a title alone is what is shown
+            (false, true) => (None, title),
+            (true, false) => (None, body),
+            (false, false) => (Some(title), body),
+        };
+        if let Some(handler) = self.alert_handler.as_mut() {
+            handler.alert(Alert::ToastNotification {
+                title,
+                body,
+                focus: true,
+            });
+        }
     }
 }

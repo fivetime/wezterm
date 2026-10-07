@@ -1313,7 +1313,7 @@ impl TermWindow {
                     window.invalidate();
                 }
                 MuxNotification::Alert {
-                    alert: Alert::ToastNotification { .. },
+                    alert: Alert::ToastNotification { .. } | Alert::CommandFinished { .. },
                     ..
                 } => {}
                 MuxNotification::TabAddedToWindow {
@@ -1580,7 +1580,7 @@ impl TermWindow {
                 }
             }
             MuxNotification::Alert {
-                alert: Alert::ToastNotification { .. },
+                alert: Alert::ToastNotification { .. } | Alert::CommandFinished { .. },
                 ..
             }
             | MuxNotification::AssignClipboard { .. }

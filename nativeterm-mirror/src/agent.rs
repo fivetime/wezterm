@@ -4,7 +4,8 @@
 //! NativeTerm's pipe (`Role::Terminal`): a pane described, its screen
 //! since a number (this mirror numbers it), a device's input typed, a
 //! hold at a device's size. It says, unasked, when a pane printed
-//! something. Connected for as long as the terminal runs; NativeTerm not
+//! something, and what happened there a person away may want to know of
+//! (the bell, a program's notification, a command done). Connected for as long as the terminal runs; NativeTerm not
 //! there (not started yet, started again): tried again every 2 seconds.
 
 use std::collections::HashMap;
@@ -18,7 +19,8 @@ use native_term_remote::proto::frame::Body;
 use native_term_remote::proto::input_result::Reason;
 use native_term_remote::{b64, unb64, wire};
 use native_term_session::pipe::{self, PipeConnection};
-use native_term_session::protocol::{AgentPane, AppMessage, Role, ShimMessage};
+use native_term_session::protocol::{AgentPane, AppMessage, PaneEvent, Role, ShimMessage};
+use wezterm_term::Alert;
 
 use crate::{PaneMirror, PaneSource};
 
@@ -54,14 +56,22 @@ fn serve() -> anyhow::Result<()> {
     log::info!("nativeterm agent: serving NativeTerm's remote control");
     let alive = Arc::new(AtomicBool::new(true));
     // a pane printed something: said at once (an echo waits on it), what
-    // came meanwhile said with it
-    let (changed, changes) = std::sync::mpsc::channel::<()>();
+    // came meanwhile said with it; an event in a pane: said as it is
+    let (changed, changes) = std::sync::mpsc::channel::<Option<(u64, PaneEvent)>>();
     if let Some(mux) = Mux::try_get() {
         let alive = Arc::clone(&alive);
         let changed = std::sync::Mutex::new(changed);
         mux.subscribe(move |n| {
-            if let MuxNotification::PaneOutput(_) | MuxNotification::PaneRemoved(_) = n {
-                let _ = changed.lock().unwrap().send(());
+            match n {
+                MuxNotification::PaneOutput(_) | MuxNotification::PaneRemoved(_) => {
+                    let _ = changed.lock().unwrap().send(None);
+                }
+                MuxNotification::Alert { pane_id, alert } => {
+                    if let Some(event) = pane_event(alert) {
+                        let _ = changed.lock().unwrap().send(Some((pane_id as u64, event)));
+                    }
+                }
+                _ => {}
             }
             alive.load(Ordering::Relaxed)
         });
@@ -73,10 +83,21 @@ fn serve() -> anyhow::Result<()> {
             .spawn(move || {
                 while alive.load(Ordering::Relaxed) {
                     match changes.recv_timeout(Duration::from_secs(1)) {
-                        Ok(()) => {
-                            while changes.try_recv().is_ok() {}
-                            if conn.send(&ShimMessage::AgentChanged).is_err() {
+                        Ok(first) => {
+                            // the output said once, the events each
+                            let mut printed = first.is_none();
+                            let mut events: Vec<(u64, PaneEvent)> = first.into_iter().collect();
+                            while let Ok(next) = changes.try_recv() {
+                                printed |= next.is_none();
+                                events.extend(next);
+                            }
+                            if printed && conn.send(&ShimMessage::AgentChanged).is_err() {
                                 break;
+                            }
+                            for (pane, event) in events {
+                                if conn.send(&ShimMessage::AgentEvent { pane, event }).is_err() {
+                                    break;
+                                }
                             }
                         }
                         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
@@ -90,6 +111,22 @@ fn serve() -> anyhow::Result<()> {
     alive.store(false, Ordering::Relaxed);
     conn.close();
     ended
+}
+
+/// What NativeTerm's remote control is told of an alert in a pane (the
+/// rest of them are the terminal's own business).
+fn pane_event(alert: Alert) -> Option<PaneEvent> {
+    match alert {
+        Alert::Bell => Some(PaneEvent::Bell),
+        Alert::ToastNotification { title, body, .. } => Some(PaneEvent::Notification {
+            title: title.unwrap_or_default(),
+            body,
+        }),
+        Alert::CommandFinished { status, millis } => {
+            Some(PaneEvent::CommandDone { status, millis })
+        }
+        _ => None,
+    }
 }
 
 /// NativeTerm's questions, answered one by one until it goes.

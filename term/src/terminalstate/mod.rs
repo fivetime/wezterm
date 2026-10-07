@@ -269,6 +269,14 @@ pub struct TerminalState {
 
     clear_semantic_attribute_on_newline: bool,
 
+    /// When the shell said its command's output began (OSC 133 `C`): a
+    /// command done (`D`) after it is told with how long it ran.
+    command_started: Option<std::time::Instant>,
+
+    /// OSC 99 notifications coming in chunks (`d=0`): by identifier, the
+    /// title and the text so far.
+    kitty_notifications: HashMap<String, (String, String)>,
+
     /// If true, writing a character inserts a new cell
     insert: bool,
 
@@ -536,6 +544,8 @@ impl TerminalState {
             left_and_right_margin_mode: false,
             wrap_next: false,
             clear_semantic_attribute_on_newline: false,
+            command_started: None,
+            kitty_notifications: HashMap::new(),
             // We default auto wrap to true even though the default for
             // a dec terminal is false, because it is more useful this way.
             dec_auto_wrap: true,

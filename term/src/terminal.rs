@@ -71,6 +71,13 @@ pub enum Alert {
     OutputSinceFocusLost,
     /// A change to the progress bar state
     Progress(Progress),
+    /// A command ended, as the shell marks its commands (OSC 133 `D`
+    /// after `C`): its exit status and how long it ran (NativeTerm's
+    /// remote control tells a device away of the long ones)
+    CommandFinished {
+        status: i32,
+        millis: u64,
+    },
 }
 
 pub trait AlertHandler: Send + Sync {
